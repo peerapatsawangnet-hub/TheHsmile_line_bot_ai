@@ -71,6 +71,11 @@ function toIso(date: string, minutes: number): string {
   return `${date}T${clock(minutes)}:00${OFFSET}`;
 }
 
+// RFC3339 ไม่รับชั่วโมง 24 จึงใช้เที่ยงคืนของวันถัดไปเป็นเวลาจบของวัน
+function endOfDay(date: string): string {
+  return new Date(Date.parse(toIso(date, 0)) + DAY_MS).toISOString();
+}
+
 function dateAt(now: number, daysAhead: number): string {
   return new Date(now + OFFSET_MS + daysAhead * DAY_MS).toISOString().slice(0, 10);
 }
@@ -244,7 +249,7 @@ function askVisit(service: Service, right: string): Message {
 async function askDate(service: Service, right: string, visit: string, now: number): Promise<Message> {
   const hours = await getBookingHours();
   const lastDate = dateAt(now, BOOKING_DAYS_AHEAD);
-  const events = await loadEvents(new Date(now).toISOString(), toIso(lastDate, 24 * 60), now);
+  const events = await loadEvents(new Date(now).toISOString(), endOfDay(lastDate), now);
 
   const items = [];
   for (let i = 0; i <= BOOKING_DAYS_AHEAD; i++) {
@@ -270,7 +275,7 @@ async function askDate(service: Service, right: string, visit: string, now: numb
 async function slotsForDate(service: Service, date: string, now: number): Promise<number[]> {
   const ranges = rangesFor(date, await getBookingHours());
   if (ranges.length === 0) return [];
-  const events = await loadEvents(toIso(date, 0), toIso(date, 24 * 60), now);
+  const events = await loadEvents(toIso(date, 0), endOfDay(date), now);
   return freeSlots(date, ranges, service.minutes, events, now);
 }
 
@@ -537,7 +542,7 @@ export async function sendDailyReminders(now: number): Promise<{ sent: number; f
   const events = await listEvents({
     privateExtendedProperty: "source=line",
     timeMin: toIso(tomorrow, 0),
-    timeMax: toIso(tomorrow, 24 * 60),
+    timeMax: endOfDay(tomorrow),
   });
 
   let sent = 0;

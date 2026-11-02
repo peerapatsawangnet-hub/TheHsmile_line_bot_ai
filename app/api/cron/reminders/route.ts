@@ -3,6 +3,8 @@ import { isBookingEnabled, sendDailyReminders } from "@/lib/booking";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// force-dynamic อย่างเดียวไม่พอ: Next.js ยัง cache การส่งข้อความ LINE ใน GET handler
+export const fetchCache = "force-no-store";
 export const maxDuration = 60;
 
 // Vercel Cron ส่ง Authorization: Bearer <CRON_SECRET> มาให้เอง

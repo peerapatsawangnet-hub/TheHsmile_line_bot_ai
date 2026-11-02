@@ -18,6 +18,8 @@ import { getFaqCsv } from "@/lib/sheet";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+// ไม่ให้ Next.js cache การเรียก LINE หรือ Google
+export const fetchCache = "force-no-store";
 export const maxDuration = 30;  // การจองเรียก Calendar หลายครั้ง
 
 async function buildAnswer(text: string): Promise<string> {
