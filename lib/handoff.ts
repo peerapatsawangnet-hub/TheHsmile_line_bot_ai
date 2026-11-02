@@ -13,6 +13,10 @@ const HANDOFF_TRIGGERS = [
   "talk to a human",
   "talk to staff",
   "speak to staff",
+  // เปลี่ยนนัด: ทีมคลินิกเป็นคนแก้ใน Google Calendar
+  "เปลี่ยนนัด",
+  "เลื่อนนัด",
+  "ยกเลิกนัด",
   // ร้องเรียน
   "ฟ้อง",
   "ร้องเรียน",

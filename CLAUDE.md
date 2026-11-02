@@ -24,6 +24,17 @@ LINE Official Account bot ของคลินิกทันตกรรม Th
 
 `LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`, `GEMINI_API_KEY`, `SHEET_CSV_URL`, `ADMIN_GROUP_ID` (optional)
 
+ระบบจองคิวเปิดเมื่อมีครบ: `ADMIN_GROUP_ID`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY`, `GOOGLE_CALENDAR_ID`, `SERVICES_CSV_URL`, `HOURS_CSV_URL`
+
+- แท็บบริการ: `service,duration_minutes,active`
+- แท็บเวลาจอง: `day,open,close` เช่น `จันทร์,10:00,12:00` หนึ่งวันมีหลายแถวได้ วันที่ไม่มีแถวถือว่าปิด
+- วันพิเศษ: ใส่ `day` เป็น `YYYY-MM-DD` ใช้แทนเวลาปกติของวันนั้น ถ้าเว้น `open` และ `close` ถือว่าปิด
+- `lib/booking.ts`, `lib/booking-config.ts`, `lib/calendar.ts`: ขั้นตอนจอง การอ่านข้อมูล และ Calendar API
+- ใช้ Google Calendar เดิมของคลินิก นับคิวจากเวลาเท่านั้น ห้ามอ่านชื่อหรือเบอร์ของนัดอื่น
+- สถานะนัด: `tentative` + สีเทา (`colorId` 8) คือรอแอดมิน, `confirmed` + สีฟ้า (`colorId` 7) คือแอดมินยืนยันแล้ว, สีม่วง (`colorId` 3) คือคนไข้กดยืนยันแล้ว
+- `app/api/cron/reminders/route.ts`: ส่งข้อความเตือนนัดวันถัดไปทุกวันราว 09:00 น. ต้องตั้ง `CRON_SECRET` และส่งได้เฉพาะนัดที่จองผ่าน LINE
+- แอดมินเป็นคนเติม HN ในปฏิทิน บอทไม่ถาม HN จากลูกค้า
+
 ## Sheet
 
 แถวแรกต้องเป็น `category,question,answer,active` ตัวพิมพ์เล็กตามนี้ มิฉะนั้นจะขึ้น `sheet_empty`

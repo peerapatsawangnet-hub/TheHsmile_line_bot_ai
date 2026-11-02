@@ -1,5 +1,14 @@
 import { HTTPFetchError, messagingApi, validateSignature, webhook } from "@line/bot-sdk";
 import { NextRequest, NextResponse } from "next/server";
+import {
+  handleAdminPostback,
+  handleBookingDetails,
+  handleBookingPostback,
+  handleBookingText,
+  isAdminAction,
+  isBookingEnabled,
+  isBookingRequest,
+} from "@/lib/booking";
 import { DEFAULT_REPLY } from "@/lib/config";
 import { handoffCard } from "@/lib/flex-cards";
 import { askGemini } from "@/lib/gemini";
@@ -9,7 +18,7 @@ import { getFaqCsv } from "@/lib/sheet";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 15;
+export const maxDuration = 30;  // การจองเรียก Calendar หลายครั้ง
 
 async function buildAnswer(text: string): Promise<string> {
   try {
@@ -49,6 +58,25 @@ async function handleEvent(event: webhook.Event): Promise<void> {
       return;
     }
 
+    if (event.type === "postback") {
+      const { postback, replyToken, source } = event as webhook.PostbackEvent;
+      if (!replyToken) return;
+
+      // ปุ่มยืนยันนัดกดได้เฉพาะในกลุ่มแอดมินเท่านั้น
+      if (isAdminAction(postback.data)) {
+        const fromAdminGroup =
+          source?.type === "group" &&
+          (source as webhook.GroupSource).groupId === process.env.ADMIN_GROUP_ID;
+        if (fromAdminGroup) await sendReply(replyToken, await handleAdminPostback(postback.data));
+        return;
+      }
+
+      if (source?.type !== "user") return;
+      const reply = await handleBookingPostback(postback.data, (source as webhook.UserSource).userId);
+      if (reply) await sendReply(replyToken, reply);
+      return;
+    }
+
     // ตอบเฉพาะแชตส่วนตัว ไม่อย่างนั้นบอทจะตอบทุกข้อความในกลุ่มแอดมิน
     if (event.type !== "message" || event.source?.type !== "user") return;
     const { message, replyToken, source } = event as webhook.MessageEvent;
@@ -69,6 +97,17 @@ async function handleEvent(event: webhook.Event): Promise<void> {
         sendReply(replyToken, handoffCard()),
       ]);
       return;
+    }
+
+    if (isBookingEnabled()) {
+      const { userId } = source as webhook.UserSource;
+      const reply =
+        (await handleBookingDetails(userId, text)) ??
+        (isBookingRequest(text) ? await handleBookingText(userId) : null);
+      if (reply) {
+        await sendReply(replyToken, reply);
+        return;
+      }
     }
 
     await sendReply(replyToken, { type: "text", text: await buildAnswer(text) });
