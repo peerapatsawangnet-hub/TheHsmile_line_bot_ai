@@ -147,3 +147,6 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Licensed recipe pack: do not redistribute
+line-bot-recipe.md

@@ -1,24 +1,17 @@
 import { HTTPFetchError, messagingApi, validateSignature, webhook } from "@line/bot-sdk";
 import { NextRequest, NextResponse } from "next/server";
 import { DEFAULT_REPLY } from "@/lib/config";
+import { handoffCard } from "@/lib/flex-cards";
 import { askGemini } from "@/lib/gemini";
+import { notifyAdmin, shouldHandoff } from "@/lib/handoff";
+import { getLineClient } from "@/lib/line";
 import { getFaqCsv } from "@/lib/sheet";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 15;
 
-let client: messagingApi.MessagingApiClient | null = null;
-
-function getClient(): messagingApi.MessagingApiClient {
-  client ??= new messagingApi.MessagingApiClient({
-    channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN ?? "",
-  });
-  return client;
-}
-
 async function buildAnswer(text: string): Promise<string> {
-  console.log(JSON.stringify({ tag: "line_message", length: text.length }));
   try {
     const faq = await getFaqCsv();
     return (await askGemini(faq, text)) ?? DEFAULT_REPLY;
@@ -28,11 +21,11 @@ async function buildAnswer(text: string): Promise<string> {
   }
 }
 
-async function sendReply(replyToken: string, text: string): Promise<void> {
+async function sendReply(replyToken: string, message: messagingApi.Message): Promise<void> {
   try {
-    await getClient().replyMessage({
+    await getLineClient().replyMessage({
       replyToken,
-      messages: [{ type: "text", text }],
+      messages: [message],
     });
   } catch (err) {
     // reply token ใช้ได้ครั้งเดียว จึงไม่ retry และไม่ throw ต่อ
@@ -47,16 +40,38 @@ async function sendReply(replyToken: string, text: string): Promise<void> {
 
 async function handleEvent(event: webhook.Event): Promise<void> {
   try {
-    if (event.type !== "message") return;
-    const { message, replyToken } = event as webhook.MessageEvent;
+    // log groupId ไว้ใช้ตั้ง ADMIN_GROUP_ID ตอนเชิญบอทเข้ากลุ่มแอดมิน
+    if (event.type === "join" && event.source?.type === "group") {
+      console.log(JSON.stringify({
+        tag: "line_join",
+        groupId: (event.source as webhook.GroupSource).groupId,
+      }));
+      return;
+    }
+
+    // ตอบเฉพาะแชตส่วนตัว ไม่อย่างนั้นบอทจะตอบทุกข้อความในกลุ่มแอดมิน
+    if (event.type !== "message" || event.source?.type !== "user") return;
+    const { message, replyToken, source } = event as webhook.MessageEvent;
     if (!replyToken) return;
 
-    const replyText =
-      message.type === "text"
-        ? await buildAnswer((message as webhook.TextMessageContent).text)
-        : DEFAULT_REPLY;
+    if (message.type !== "text") {
+      await sendReply(replyToken, { type: "text", text: DEFAULT_REPLY });
+      return;
+    }
 
-    await sendReply(replyToken, replyText);
+    const { text } = message as webhook.TextMessageContent;
+    console.log(JSON.stringify({ tag: "line_message", length: text.length }));
+
+    if (shouldHandoff(text)) {
+      console.log(JSON.stringify({ tag: "handoff" }));
+      await Promise.all([
+        notifyAdmin((source as webhook.UserSource).userId, text),
+        sendReply(replyToken, handoffCard()),
+      ]);
+      return;
+    }
+
+    await sendReply(replyToken, { type: "text", text: await buildAnswer(text) });
   } catch (err) {
     console.error(JSON.stringify({
       tag: "unhandled",
