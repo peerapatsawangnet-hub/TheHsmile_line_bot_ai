@@ -88,25 +88,41 @@ function parse(raw: string): Classification | null {
   };
 }
 
+// Google ตอบว่าโมเดลคนใช้เยอะหรือเกินโควต้าชั่วคราว
+const RETRYABLE_STATUS = new Set([429, 503]);
+
+function generate(faqCsv: string, question: string, abortSignal: AbortSignal) {
+  return getClient().models.generateContent({
+    model: GEMINI_MODEL,
+    contents: buildUserContent(faqCsv, question),
+    config: {
+      systemInstruction: buildSystemPrompt(),
+      temperature: TEMPERATURE,
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      thinkingConfig: { thinkingLevel: GEMINI_THINKING_LEVEL },
+      responseMimeType: "application/json",
+      responseSchema: RESPONSE_SCHEMA,
+      abortSignal,
+    },
+  });
+}
+
 // คืน null เมื่อใช้ผลไม่ได้ (timeout, error, MAX_TOKENS, JSON เสีย) ให้ผู้เรียกใช้ fallback
 export async function classifyMessage(faqCsv: string, question: string): Promise<Classification | null> {
   const startedAt = Date.now();
+  // ครั้งที่ลองใหม่ใช้งบ 7 วินาทีเดียวกัน ไม่ต่อเวลาเพิ่ม
   const abortSignal = AbortSignal.timeout(GEMINI_TIMEOUT_MS);
 
   try {
-    const res = await getClient().models.generateContent({
-      model: GEMINI_MODEL,
-      contents: buildUserContent(faqCsv, question),
-      config: {
-        systemInstruction: buildSystemPrompt(),
-        temperature: TEMPERATURE,
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
-        thinkingConfig: { thinkingLevel: GEMINI_THINKING_LEVEL },
-        responseMimeType: "application/json",
-        responseSchema: RESPONSE_SCHEMA,
-        abortSignal,
-      },
-    });
+    let res;
+    try {
+      res = await generate(faqCsv, question, abortSignal);
+    } catch (err) {
+      const status = err instanceof ApiError ? err.status : undefined;
+      if (abortSignal.aborted || !status || !RETRYABLE_STATUS.has(status)) throw err;
+      console.warn(JSON.stringify({ tag: "gemini_retry", status, latencyMs: Date.now() - startedAt }));
+      res = await generate(faqCsv, question, abortSignal);
+    }
 
     const finishReason = res.candidates?.[0]?.finishReason;
     const result = finishReason === "STOP" && res.text ? parse(res.text) : null;
