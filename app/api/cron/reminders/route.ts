@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isBookingEnabled, sendDailyReminders } from "@/lib/booking";
+import { sendDailySummary } from "@/lib/daily-summary";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,14 +16,31 @@ export async function GET(req: NextRequest) {
   }
   if (!isBookingEnabled()) return NextResponse.json({ skipped: true });
 
+  const now = Date.now();
+  let reminders;
   try {
-    return NextResponse.json(await sendDailyReminders(Date.now()));
+    reminders = await sendDailyReminders(now);
   } catch (err) {
-    console.error(JSON.stringify({
-      tag: "reminder_error",
-      status: (err as { status?: number }).status,
-      detail: err instanceof Error ? err.message : String(err),
-    }));
-    return new NextResponse(null, { status: 500 });
+    logError("reminder_error", err);
   }
+
+  // ส่งสรุปหลังเตือนนัด ใช้ cron เดิมเพราะ Vercel Hobby ตั้ง cron ได้จำกัด
+  let summary = false;
+  try {
+    await sendDailySummary(now);
+    summary = true;
+  } catch (err) {
+    logError("daily_summary_error", err);
+  }
+
+  if (!reminders) return new NextResponse(null, { status: 500 });
+  return NextResponse.json({ ...reminders, summary });
+}
+
+function logError(tag: string, err: unknown): void {
+  console.error(JSON.stringify({
+    tag,
+    status: (err as { status?: number }).status,
+    detail: err instanceof Error ? err.message : String(err),
+  }));
 }
