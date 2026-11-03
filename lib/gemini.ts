@@ -129,7 +129,7 @@ export async function classifyMessage(faqCsv: string, question: string): Promise
     console.log(JSON.stringify({
       tag: "gemini",
       finishReason,
-      thoughtsTokenCount: res.usageMetadata?.thoughtsTokenCount,
+      thoughtsTokenCount: res.usageMetadata?.thoughtsTokenCount ?? 0,
       candidatesTokenCount: res.usageMetadata?.candidatesTokenCount,
       intent: result?.intent,
       confidence: result?.confidence,

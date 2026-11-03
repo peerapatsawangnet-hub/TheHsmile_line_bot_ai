@@ -8,7 +8,9 @@ export const MAX_OUTPUT_TOKENS = 1024;   // Gemini 3.x นับ thinking + outp
 export const GEMINI_THINKING_LEVEL = ThinkingLevel.LOW;
 export const SHEET_CACHE_MS = 60_000;
 export const SHEET_TIMEOUT_MS = 3_000;
-export const GEMINI_TIMEOUT_MS = 7_000;  // รวม sheet แล้วต้องไม่เกินงบ 10 วินาที
+// ชั่วคราวช่วงทดสอบ shadow: ขยายจาก 7 วินาทีเพื่อวัดว่า Gemini ใช้เวลาจริงเท่าไร
+// ต้องตั้งค่าถาวรตามผลที่วัดได้ก่อนเปลี่ยน bot_mode เป็น live
+export const GEMINI_TIMEOUT_MS = 20_000;
 
 export const CALENDAR_TIMEOUT_MS = 5_000;
 export const BOOKING_DAYS_AHEAD = 14;
