@@ -150,3 +150,6 @@ vite.config.ts.timestamp-*
 
 # Licensed recipe pack: do not redistribute
 line-bot-recipe.md
+
+# Internal update spec: do not publish
+hsmile-line-bot-update-spec.md
