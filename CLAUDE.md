@@ -1,52 +1,63 @@
 # CLAUDE.md: LINE Bot The H Smile Pattaya
 
-LINE Official Account bot ของคลินิกทันตกรรม The H Smile Pattaya ตอบลูกค้าด้วย Gemini จาก FAQ ใน Google Sheet
+LINE Official Account bot ของคลินิกทันตกรรม The H Smile Pattaya ใช้ Gemini จัดประเภทข้อความลูกค้า ตอบจาก FAQ ใน Google Sheet และส่งเข้า flow จองคิว บอทพูดเฉพาะเมื่อมั่นใจ นอกนั้นเงียบและแจ้งกลุ่มแอดมิน
 
 ## Stack (locked)
 
 - Next.js 14 App Router + TypeScript 5 (TypeScript 7 ทำให้ `next build` พัง)
-- `@line/bot-sdk`, `@google/genai`, `papaparse`
-- Vercel, npm
+- `@line/bot-sdk`, `@google/genai`, `papaparse`, `google-auth-library`
+- Vercel Hobby, npm, `tsx` สำหรับ test
 
 ## Files
 
-- `app/api/line-webhook/route.ts`: verify signature → handoff หรือตอบจาก FAQ → reply
+- `app/api/line-webhook/route.ts`: ลำดับตัดสินใจ signature → กลุ่มแอดมิน → แชตส่วนตัว → `settings` → ข้อความตัวอักษร → คำสั่งตรง → flow จองที่ค้างอยู่ → `ack` → classifier → `shadow`
+- `lib/intents.ts`: นิยามและตัวอย่างของ 16 intent เป็นแหล่งเดียวของ `<intent_guide>` และป้าย "เรื่อง" ที่แจ้งแอดมิน
+- `lib/gemini.ts`, `lib/prompt.ts`: classifier แบบ JSON schema และ system prompt
+- `lib/triage.ts`: regex กรอง `ack`, fallback เมื่อ Gemini ใช้ไม่ได้, แปลงผล classifier เป็นการกระทำ
+- `lib/thai-datetime.ts`: แปลงวันเวลาภาษาไทย (พ.ศ., เดือนย่อ, บ่าย3) ห้ามให้ Gemini คำนวณวันที่
+- `lib/handoff.ts`: คำสั่งตรง (`ขอแอดมิน`, `เปลี่ยนนัด` ฯลฯ) และการแจ้งกลุ่มแอดมิน รวมแจ้งด่วน 🔴 และโหมดทดลอง
+- `lib/settings.ts`: แท็บ `settings` ใน Sheet
+- `lib/daily-summary.ts`: สรุปรายวันและโควต้าข้อความ ส่งหลังเตือนนัดใน cron เดิม
 - `lib/config.ts`: ค่าคงที่และข้อความมาตรฐาน
 - `lib/sheet.ts`: ดึง กรอง และ cache FAQ
-- `lib/gemini.ts`, `lib/prompt.ts`: เรียก Gemini และ system prompt
-- `lib/handoff.ts`: ตรวจคำ trigger และแจ้งกลุ่มแอดมิน
-- `lib/flex-cards.ts`: Flex Message
-- `lib/line.ts`: LINE client
-- `rich-menu.json`, `scripts/install-rich-menu.mjs`: Rich Menu
-- `docs/test-conversations.md`: บททดสอบก่อนปล่อยใช้งาน
+- `lib/flex-cards.ts`, `lib/line.ts`: Flex Message และ LINE client
+- `rich-menu.json`, `scripts/install-rich-menu.mjs`: Rich Menu 6 ช่อง
+- `tests/*.test.ts` (`npm test`), `tests/intent-holdout.json` + `scripts/test-intents.ts`: ชุดทดสอบ
+- `docs/test-conversations.md`: บททดสอบบนมือถือก่อนปล่อยใช้งาน
 
 ## Env vars
 
-`LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`, `GEMINI_API_KEY`, `SHEET_CSV_URL`, `ADMIN_GROUP_ID` (optional)
+`LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`, `GEMINI_API_KEY`, `SHEET_CSV_URL`, `ADMIN_GROUP_ID` (required: ไม่ตั้งจะ log `admin_group_missing`), `SETTINGS_CSV_URL` (ไม่ตั้งถือว่า `bot_enabled = TRUE`, `bot_mode = live`), `DOCTOR_SCHEDULE_CSV_URL` (optional)
 
 ระบบจองคิวเปิดเมื่อมีครบ: `ADMIN_GROUP_ID`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY`, `GOOGLE_CALENDAR_ID`, `SERVICES_CSV_URL`, `HOURS_CSV_URL`
 
-- แท็บบริการ: `service,duration_minutes,active`
+- แท็บบริการ: `service,duration_minutes,active,needs_doctor` (`needs_doctor` ว่างถือว่า `TRUE`)
 - แท็บเวลาจอง: `day,open,close` เช่น `จันทร์,10:00,12:00` หนึ่งวันมีหลายแถวได้ วันที่ไม่มีแถวถือว่าปิด
 - วันพิเศษ: ใส่ `day` เป็น `YYYY-MM-DD` ใช้แทนเวลาปกติของวันนั้น ถ้าเว้น `open` และ `close` ถือว่าปิด
+- วันคุณหมอเข้า: all-day event ชื่อ `หมอเข้า` ในปฏิทินเดิม บริการ `needs_doctor = TRUE` จองได้เฉพาะวันนั้น ถ้าช่วง 14 วันที่เปิดจองยังไม่มี event นี้เลย ถือว่าไม่จำกัดวัน
+- แท็บ `doctor_schedule` (ไม่บังคับ): `month,image_url` เช่น `2026-11,https://…` ส่งรูปตารางตามคำตอบวันคุณหมอเข้า
 - `lib/booking.ts`, `lib/booking-config.ts`, `lib/calendar.ts`: ขั้นตอนจอง การอ่านข้อมูล และ Calendar API
-- ใช้ Google Calendar เดิมของคลินิก นับคิวจากเวลาเท่านั้น ห้ามอ่านชื่อหรือเบอร์ของนัดอื่น
+- ใช้ Google Calendar เดิมของคลินิก นับคิวจากเวลาเท่านั้น ห้ามอ่านชื่อหรือเบอร์ของนัดอื่น การอ่านวันคุณหมอเข้าใช้ `q` ให้ Google กรองก่อน
 - สถานะนัด: `tentative` + สีเทา (`colorId` 8) คือรอแอดมิน, `confirmed` + สีฟ้า (`colorId` 7) คือแอดมินยืนยันแล้ว, สีม่วง (`colorId` 3) คือคนไข้กดยืนยันแล้ว
-- `app/api/cron/reminders/route.ts`: ส่งข้อความเตือนนัดวันถัดไปทุกวันราว 09:00 น. ต้องตั้ง `CRON_SECRET` และส่งได้เฉพาะนัดที่จองผ่าน LINE
+- `app/api/cron/reminders/route.ts`: ทุกวันราว 09:00 น. เตือนนัดวันถัดไป (เฉพาะนัดที่จองผ่าน LINE) แล้วส่งสรุปรายวันเข้ากลุ่มแอดมิน ต้องตั้ง `CRON_SECRET`
 - แอดมินเป็นคนเติม HN ในปฏิทิน บอทไม่ถาม HN จากลูกค้า
 
 ## Sheet
 
-แถวแรกต้องเป็น `category,question,answer,active` ตัวพิมพ์เล็กตามนี้ มิฉะนั้นจะขึ้น `sheet_empty`
+แถวแรกของแท็บ FAQ ต้องเป็น `category,question,answer,active` ตัวพิมพ์เล็กตามนี้ มิฉะนั้นจะขึ้น `sheet_empty` แท็บ `settings` ใช้ `key,value` (`bot_enabled`, `bot_mode`)
 
 ## Rules
 
 - ห้ามใส่ราคา เวลา ที่อยู่ หรือชื่อทันตแพทย์ในโค้ด ข้อมูลเหล่านี้มาจาก Sheet เท่านั้น
 - ห้ามข้าม signature verification และห้าม hardcode token
 - ห้าม retry ด้วย reply token เดิม เพราะใช้ได้ครั้งเดียว
-- ห้าม log ข้อความลูกค้าหรือ userId ให้ log แค่ความยาวข้อความ
+- ห้าม log ข้อความลูกค้า ชื่อ เบอร์ userId หรือ displayName ให้ log แค่ความยาวข้อความ intent confidence token และ error
+- ข้อความลูกค้าส่งเข้ากลุ่มแอดมินได้ (เจ้าของอนุญาต) แต่ห้ามใส่ userId
 - ห้าม parse CSV เอง ให้ใช้ papaparse
-- งบเวลาต่อข้อความคือ Sheet 3 วินาที + Gemini 7 วินาที
-- ทุกทางที่พังต้องจบที่ `DEFAULT_REPLY`
+- งบเวลาต่อข้อความคือ Sheet 3 วินาที + Gemini 7 วินาที อ่านปฏิทินเพื่อตอบคำถามไม่เกิน 3 วินาที
+- ทางที่พังต้องจบที่ "เงียบ + แจ้งกลุ่มแอดมิน" ห้ามส่งข้อความขออภัยให้ลูกค้า
+- เคสฉุกเฉินแจ้งกลุ่มแอดมินเสมอ แม้ `bot_enabled = FALSE` หรือ `bot_mode = shadow`
+- ข้อความใน flow จองคิวห้ามเปลี่ยน ต้องผ่าน regression 9 ขั้นใน `docs/test-conversations.md` ก่อน deploy
 - บอทตอบเฉพาะแชตส่วนตัว ไม่ตอบในกลุ่ม
-- `line-bot-recipe.md` ห้ามขึ้น repo เพราะ license ห้ามแชร์ต่อ และ repo นี้เป็น public
+- `line-bot-recipe.md` และ `hsmile-line-bot-update-spec.md` ห้ามขึ้น repo เพราะ repo นี้เป็น public
+- ยังไม่มีที่เก็บสถานะ (Upstash ฯลฯ) ห้ามเพิ่มจนกว่าเจ้าของอนุมัติ
