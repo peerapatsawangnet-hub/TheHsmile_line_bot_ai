@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "tsx --test \"tests/**/*.test.ts\"",
+    "test:intents": "tsx scripts/test-intents.ts"
   },
   "dependencies": {
     "@google/genai": "^2.32.0",
@@ -21,6 +23,7 @@
     "@types/papaparse": "^5.5.2",
     "@types/react": "^18.3.31",
     "@types/react-dom": "^18.3.7",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3"
   }
 }

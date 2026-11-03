@@ -1,6 +1,14 @@
 import { messagingApi } from "@line/bot-sdk";
 import { BookingHours, getBookingHours, getServices, Service, TimeRange } from "./booking-config";
-import { CalendarEvent, deleteEvent, getEvent, insertEvent, listEvents, patchEvent } from "./calendar";
+import {
+  CalendarEvent,
+  deleteEvent,
+  getEvent,
+  insertEvent,
+  listDoctorDays,
+  listEvents,
+  patchEvent,
+} from "./calendar";
 import {
   BOOKING_CAPACITY_PER_SLOT,
   BOOKING_DAYS_AHEAD,
@@ -11,10 +19,12 @@ import {
   CALENDAR_COLOR_PENDING,
   CALENDAR_COLOR_UNCONFIRMED,
   CLINIC_PHONE,
-  DEFAULT_REPLY,
 } from "./config";
 import { bookingRequestCard, reminderCard } from "./flex-cards";
+import type { Slots } from "./gemini";
+import { notifyAdmin } from "./handoff";
 import { getLineClient } from "./line";
+import { MONTH_SHORT, parseDateText, parsePeriod, parseTimeText } from "./thai-datetime";
 
 type Message = messagingApi.Message;
 
@@ -43,6 +53,10 @@ const PERIODS: Record<string, { label: string; from: number; to: number }> = {
   pm: { label: "ช่วงบ่าย", from: 12 * 60, to: 16 * 60 },
   eve: { label: "ช่วงเย็น", from: 16 * 60, to: 24 * 60 },
 };
+const COVERAGES: Record<string, string> = { สปสช: "gold", ประกันสังคม: "sso", ชำระเอง: "self" };
+
+// ข้อมูลที่ลูกค้าบอกมาแล้วในข้อความแรก ส่งต่อไปกับปุ่มทุกขั้นจนถึงขั้นที่ใช้
+type Prefill = { right?: string; date?: string; period?: string; start?: number };
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const clock = (minutes: number) => `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
@@ -67,20 +81,20 @@ export function isAdminAction(data: string): boolean {
   return ADMIN_ACTIONS.has(new URLSearchParams(data).get("a") ?? "");
 }
 
-function toIso(date: string, minutes: number): string {
+export function toIso(date: string, minutes: number): string {
   return `${date}T${clock(minutes)}:00${OFFSET}`;
 }
 
 // RFC3339 ไม่รับชั่วโมง 24 จึงใช้เที่ยงคืนของวันถัดไปเป็นเวลาจบของวัน
-function endOfDay(date: string): string {
+export function endOfDay(date: string): string {
   return new Date(Date.parse(toIso(date, 0)) + DAY_MS).toISOString();
 }
 
-function dateAt(now: number, daysAhead: number): string {
+export function dateAt(now: number, daysAhead: number): string {
   return new Date(now + OFFSET_MS + daysAhead * DAY_MS).toISOString().slice(0, 10);
 }
 
-function formatDate(value: string): string {
+export function formatDate(value: string): string {
   return new Intl.DateTimeFormat("th-TH", {
     timeZone: "Asia/Bangkok",
     weekday: "long",
@@ -103,7 +117,7 @@ function formatTime(value: string): string {
   }).format(new Date(value));
 }
 
-function formatWhen(startIso: string): string {
+export function formatWhen(startIso: string): string {
   return `${formatDate(startIso)} เวลา ${formatTime(startIso)} น.`;
 }
 
@@ -193,7 +207,69 @@ function withPrefix(prefix: string, message: Message): Message {
   return { ...message, text: `${prefix}\n${(message as messagingApi.TextMessage).text}` } as Message;
 }
 
-async function findUserEvents(key: string, userId: string, now: number): Promise<CalendarEvent[]> {
+function prefillParams(prefill: Prefill): Record<string, string> {
+  const params: Record<string, string> = {};
+  if (prefill.right) params.pr = prefill.right;
+  if (prefill.date) params.pd = prefill.date;
+  if (prefill.period) params.pp = prefill.period;
+  if (prefill.start !== undefined) params.pt = String(prefill.start);
+  return params;
+}
+
+function prefillFrom(params: URLSearchParams): Prefill {
+  const right = params.get("pr") ?? "";
+  const date = params.get("pd") ?? "";
+  const period = params.get("pp") ?? "";
+  const start = Number(params.get("pt") ?? NaN);
+  return {
+    right: RIGHTS[right] ? right : undefined,
+    date: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : undefined,
+    period: PERIODS[period] ? period : undefined,
+    start: Number.isInteger(start) && start >= 0 && start < 24 * 60 ? start : undefined,
+  };
+}
+
+function periodOf(start: number): string {
+  return Object.entries(PERIODS).find(([, { from, to }]) => start >= from && start < to)?.[0] ?? "am";
+}
+
+// slot ที่แปลงไม่ได้ทิ้งไป ให้ flow ถามเอง
+function prefillFromSlots(slots: Slots, now: number): Prefill {
+  const parsed = slots.date_text ? parseDateText(slots.date_text, now) : null;
+  const start = slots.time_text ? parseTimeText(slots.time_text) ?? undefined : undefined;
+  const period = start !== undefined ? periodOf(start) : slots.period ? parsePeriod(slots.period) ?? undefined : undefined;
+  return {
+    right: slots.coverage ? COVERAGES[slots.coverage.replace(/\./g, "")] : undefined,
+    // วันกับวันที่ไม่ตรงกัน (เช่น "วันจันทร์20" แต่ 20 เป็นวันศุกร์) ให้ลูกค้าเลือกวันเอง
+    date: parsed && !parsed.weekdayMismatch ? parsed.date : undefined,
+    period,
+    start,
+  };
+}
+
+function matchService(services: Service[], name: string | undefined): Service | undefined {
+  const wanted = name?.replace(/\s+/g, "").toLowerCase();
+  if (!wanted) return undefined;
+  const key = (service: Service) => service.name.replace(/\s+/g, "").toLowerCase();
+  const exact = services.find((service) => key(service) === wanted);
+  if (exact) return exact;
+  const partial = services.filter((service) => key(service).includes(wanted) || wanted.includes(key(service)));
+  return partial.length === 1 ? partial[0] : undefined;
+}
+
+// วันที่คุณหมอเข้าในช่วงที่เปิดจอง ถ้ายังไม่มีการลงวันคุณหมอในช่วงนี้เลย ไม่จำกัดวัน
+// กันการจองปิดทั้งหมดเพราะยังไม่ได้ลงตาราง
+async function doctorDays(service: Service, now: number): Promise<Set<string> | null> {
+  if (!service.needsDoctor) return null;
+  const days = await listDoctorDays(toIso(dateAt(now, 0), 0), endOfDay(dateAt(now, BOOKING_DAYS_AHEAD)));
+  if (days.length === 0) {
+    console.warn(JSON.stringify({ tag: "doctor_days_missing" }));
+    return null;
+  }
+  return new Set(days);
+}
+
+export async function findUserEvents(key: string, userId: string, now: number): Promise<CalendarEvent[]> {
   const events = await listEvents({
     privateExtendedProperty: `${key}=${userId}`,
     timeMin: new Date(now).toISOString(),
@@ -208,52 +284,85 @@ function existingBookingMessage(event: CalendarEvent): Message {
   };
 }
 
-async function askService(): Promise<Message> {
+class NoServicesError extends Error {}
+
+async function askService(prefill: Prefill = {}): Promise<Message> {
   const services = await getServices();
   if (services.length === 0) {
     console.error(JSON.stringify({ tag: "booking_no_services" }));
-    return { type: "text", text: DEFAULT_REPLY };
+    throw new NoServicesError("no active services");
   }
   return quickReply(
     `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร ${CLINIC_PHONE} ได้เลยค่ะ 🦷`,
     services.map(({ name }) => ({
       label: name,
-      data: postbackData({ a: "svc", s: name }),
+      data: postbackData({ a: "svc", s: name, ...prefillParams(prefill) }),
       displayText: name,
     })),
   );
 }
 
-function askRight(service: Service): Message {
+function askRight(service: Service, prefill: Prefill = {}): Message {
+  if (prefill.right) return askVisit(service, prefill.right, prefill);
   return quickReply(
     "ใช้สิทธิการรักษาแบบไหนคะ",
     Object.entries(RIGHTS).map(([code, { label }]) => ({
       label,
-      data: postbackData({ a: "right", s: service.name, r: code }),
+      data: postbackData({ a: "right", s: service.name, r: code, ...prefillParams(prefill) }),
       displayText: label,
     })),
   );
 }
 
-function askVisit(service: Service, right: string): Message {
+function askVisit(service: Service, right: string, prefill: Prefill = {}): Message {
   return quickReply(
     "เคยมาที่คลินิกแล้วหรือมาครั้งแรกคะ",
     Object.entries(VISITS).map(([code, { label }]) => ({
       label,
-      data: postbackData({ a: "visit", s: service.name, r: right, v: code }),
+      data: postbackData({ a: "visit", s: service.name, r: right, v: code, ...prefillParams(prefill) }),
       displayText: label,
     })),
   );
+}
+
+// ข้ามขั้นวัน ช่วง และเวลาที่ลูกค้าบอกมาแล้ว ถ้าวันหรือเวลานั้นไม่ว่างให้เลือกใหม่ตามปกติ
+async function continueAfterVisit(
+  service: Service,
+  right: string,
+  visit: string,
+  prefill: Prefill,
+  userId: string,
+  now: number,
+): Promise<Message> {
+  const { date, period, start } = prefill;
+  const inRange = date && date >= dateAt(now, 0) && date <= dateAt(now, BOOKING_DAYS_AHEAD);
+  if (!date) return askDate(service, right, visit, now);
+  const slots = inRange ? await slotsForDate(service, date, now) : [];
+  if (slots.length === 0) {
+    return withPrefix(
+      `${formatDate(`${date}T12:00:00${OFFSET}`)} ไม่มีคิวว่างค่ะ`,
+      await askDate(service, right, visit, now),
+    );
+  }
+  if (start !== undefined && slots.includes(start)) {
+    return holdSlot(service, right, visit, date, periodOf(start), start, userId, now);
+  }
+  if (period) return askTime(service, right, visit, date, period, now);
+  return askPeriod(service, right, visit, date, now);
 }
 
 async function askDate(service: Service, right: string, visit: string, now: number): Promise<Message> {
   const hours = await getBookingHours();
   const lastDate = dateAt(now, BOOKING_DAYS_AHEAD);
-  const events = await loadEvents(new Date(now).toISOString(), endOfDay(lastDate), now);
+  const [events, allowed] = await Promise.all([
+    loadEvents(new Date(now).toISOString(), endOfDay(lastDate), now),
+    doctorDays(service, now),
+  ]);
 
   const items = [];
   for (let i = 0; i <= BOOKING_DAYS_AHEAD; i++) {
     const date = dateAt(now, i);
+    if (allowed && !allowed.has(date)) continue;
     if (freeSlots(date, rangesFor(date, hours), service.minutes, events, now).length === 0) continue;
     const noon = `${date}T12:00:00${OFFSET}`;
     items.push({
@@ -275,7 +384,11 @@ async function askDate(service: Service, right: string, visit: string, now: numb
 async function slotsForDate(service: Service, date: string, now: number): Promise<number[]> {
   const ranges = rangesFor(date, await getBookingHours());
   if (ranges.length === 0) return [];
-  const events = await loadEvents(toIso(date, 0), endOfDay(date), now);
+  const [events, allowed] = await Promise.all([
+    loadEvents(toIso(date, 0), endOfDay(date), now),
+    doctorDays(service, now),
+  ]);
+  if (allowed && !allowed.has(date)) return [];
   return freeSlots(date, ranges, service.minutes, events, now);
 }
 
@@ -451,14 +564,28 @@ export async function handleBookingDetails(userId: string | undefined, text: str
   }
 }
 
-export async function handleBookingText(userId: string | undefined): Promise<Message> {
+// ระบบขัดข้อง: ลูกค้าไม่ได้รับข้อความ แอดมินได้รับแจ้งแทน
+async function failSilently(err: unknown, userId: string | undefined, message: string): Promise<null> {
+  logBookingError(err);
+  const reason = err instanceof NoServicesError ? "ระบบขัดข้อง (ไม่มีบริการในแท็บบริการ)" : "ระบบขัดข้อง (จองคิว)";
+  await notifyAdmin(userId, reason, message);
+  return null;
+}
+
+// เริ่ม flow จอง ถ้าลูกค้าบอกบริการ สิทธิ วัน หรือเวลามาแล้ว ข้ามขั้นนั้นไป
+// คืน null เมื่อระบบขัดข้อง (แจ้งแอดมินแล้ว)
+export async function startBooking(userId: string | undefined, text: string, slots: Slots = {}): Promise<Message | null> {
+  if (!userId) return null;
   try {
-    if (!userId) return { type: "text", text: DEFAULT_REPLY };
-    const [upcoming] = await findUserEvents("lineUserId", userId, Date.now());
-    return upcoming ? existingBookingMessage(upcoming) : await askService();
+    const now = Date.now();
+    const [upcoming] = await findUserEvents("lineUserId", userId, now);
+    if (upcoming) return existingBookingMessage(upcoming);
+
+    const prefill = prefillFromSlots(slots, now);
+    const service = matchService(await getServices(), slots.service);
+    return service ? askRight(service, prefill) : await askService(prefill);
   } catch (err) {
-    logBookingError(err);
-    return { type: "text", text: DEFAULT_REPLY };
+    return failSilently(err, userId, text);
   }
 }
 
@@ -469,19 +596,20 @@ export async function handleBookingPostback(data: string, userId: string | undef
   if (!["svc", "right", "visit", "date", "period", "slot"].includes(action ?? "")) return null;
 
   try {
-    if (!userId) return { type: "text", text: DEFAULT_REPLY };
+    if (!userId) return null;
     const now = Date.now();
+    const prefill = prefillFrom(params);
     const service = (await getServices()).find(({ name }) => name === params.get("s"));
-    if (!service) return await askService();
-    if (action === "svc") return askRight(service);
+    if (!service) return await askService(prefill);
+    if (action === "svc") return askRight(service, prefill);
 
     const right = params.get("r") ?? "";
-    if (!RIGHTS[right]) return askRight(service);
-    if (action === "right") return askVisit(service, right);
+    if (!RIGHTS[right]) return askRight(service, prefill);
+    if (action === "right") return askVisit(service, right, prefill);
 
     const visit = params.get("v") ?? "";
-    if (!VISITS[visit]) return askVisit(service, right);
-    if (action === "visit") return await askDate(service, right, visit, now);
+    if (!VISITS[visit]) return askVisit(service, right, prefill);
+    if (action === "visit") return await continueAfterVisit(service, right, visit, prefill, userId, now);
 
     const date = params.get("d") ?? "";
     if (action === "date") return await askPeriod(service, right, visit, date, now);
@@ -490,9 +618,34 @@ export async function handleBookingPostback(data: string, userId: string | undef
     if (action === "period") return await askTime(service, right, visit, date, period, now);
     return await holdSlot(service, right, visit, date, period, Number(params.get("t")), userId, now);
   } catch (err) {
-    logBookingError(err);
-    return { type: "text", text: DEFAULT_REPLY };
+    return failSilently(err, userId, "(กดปุ่มในขั้นตอนจองคิว)");
   }
+}
+
+// นัดที่จองผ่าน LINE ใน 30 วันข้างหน้า นัดที่แอดมินลงเองไม่มี LINE ID จึงหาไม่เจอ
+export async function describeNextAppointment(userId: string, now: number): Promise<string | null> {
+  const limit = now + 30 * DAY_MS;
+  const [next] = (await findUserEvents("lineUserId", userId, now))
+    .filter((event) => {
+      const start = Date.parse(event.start?.dateTime ?? "");
+      return !event.extendedProperties?.private?.awaitingDetailsFor && start > now && start <= limit;
+    })
+    .sort((a, b) => Date.parse(a.start?.dateTime ?? "") - Date.parse(b.start?.dateTime ?? ""));
+  if (!next) return null;
+  return `นัดของคุณคือ${formatWhen(next.start?.dateTime ?? "")} ค่ะ 😊`;
+}
+
+// คืน null เมื่อยังไม่มีการลงวันคุณหมอเข้าในเดือนนั้น
+export async function describeDoctorDays(year: number, month: number, now: number): Promise<string | null> {
+  const first = `${year}-${pad(month)}-01`;
+  const last = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+  const from = first < dateAt(now, 0) ? dateAt(now, 0) : first;
+  if (from > last) return null;
+  const days = await listDoctorDays(toIso(from, 0), endOfDay(last));
+  const inMonth = days.filter((day) => day >= from && day <= last);
+  if (inMonth.length === 0) return null;
+  const list = inMonth.map((day) => String(Number(day.slice(8)))).join(", ");
+  return `เดือน${MONTH_SHORT[month - 1]} คุณหมอเข้าวันที่ ${list} ค่ะ 😊`;
 }
 
 async function notifyCustomer(userId: string | null | undefined, text: string): Promise<boolean> {

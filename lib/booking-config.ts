@@ -1,7 +1,8 @@
 import Papa from "papaparse";
 import { SHEET_CACHE_MS, SHEET_TIMEOUT_MS } from "./config";
 
-export type Service = { name: string; minutes: number };
+// needsDoctor: นัดได้เฉพาะวันที่คุณหมอเข้า ค่าว่างถือว่าต้องใช้คุณหมอ
+export type Service = { name: string; minutes: number; needsDoctor: boolean };
 export type TimeRange = { open: number; close: number };
 export type BookingHours = {
   // คีย์คือเลขวันแบบ Date.getDay() วันที่ไม่มีแถวถือว่าปิด
@@ -16,7 +17,7 @@ const THAI_DAYS = ["อาทิตย์", "จันทร์", "อังค�
 
 const caches = new Map<string, { rows: Row[]; fetchedAt: number }>();
 
-async function getRows(envName: string): Promise<Row[]> {
+export async function getRows(envName: string): Promise<Row[]> {
   const url = process.env[envName];
   if (!url) throw new Error(`${envName} is not set`);
 
@@ -59,8 +60,16 @@ export async function getServices(): Promise<Service[]> {
     const name = row.service?.trim();
     const minutes = Number(row.duration_minutes);
     if (!name || !(minutes > 0) || row.active?.trim().toUpperCase() === "FALSE") return [];
-    return [{ name, minutes }];
+    return [{ name, minutes, needsDoctor: row.needs_doctor?.trim().toUpperCase() !== "FALSE" }];
   });
+}
+
+// แท็บ doctor_schedule ไม่บังคับ: month (YYYY-MM), image_url
+export async function getDoctorScheduleImage(month: string): Promise<string | null> {
+  if (!process.env.DOCTOR_SCHEDULE_CSV_URL) return null;
+  const rows = await getRows("DOCTOR_SCHEDULE_CSV_URL");
+  const url = rows.find((row) => row.month?.trim() === month)?.image_url?.trim();
+  return url?.startsWith("https://") ? url : null;
 }
 
 export async function getBookingHours(): Promise<BookingHours> {

@@ -18,6 +18,12 @@ export const CALENDAR_COLOR_CONFIRMED = "3";    // Grape: ม่วง คนไ
 export const CLINIC_PHONE = "062 038 9777";
 export const CLINIC_PHONE_URI = "tel:0620389777";
 export const HANDOFF_REPLY = "ขอแอดมินติดต่อกลับนะคะ 🙏";
+// ข้อความตายตัว ไม่ผ่าน Gemini
+export const THANKS_REPLY = "ยินดีค่ะ หากต้องการข้อมูลเพิ่มเติมเร่งด่วน โทร 0620389777 ค่ะ";
 
-export const DEFAULT_REPLY =
-  "ขออภัยค่ะ เรื่องนี้แอดมินขอให้เจ้าหน้าที่ติดต่อกลับโดยเร็วที่สุดนะคะ 🙏 หรือโทรสอบถามได้ที่ 062 038 9777 ค่ะ";
+// ถามเวลานัดหรือวันคุณหมอเข้า: อ่าน Calendar ไม่ทันในเวลานี้ ให้เงียบและแจ้งแอดมิน
+export const LOOKUP_TIMEOUT_MS = 3_000;
+// โควต้าข้อความเดือนนี้ใช้ไปเกินสัดส่วนนี้ ให้เตือนในสรุปรายวัน
+export const QUOTA_WARN_RATIO = 0.8;
+
+// ไม่มี DEFAULT_REPLY แล้ว: เรื่องที่บอทตอบไม่ได้ บอทเงียบและแจ้งกลุ่มแอดมินแทน

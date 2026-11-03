@@ -54,6 +54,32 @@ export async function listEvents(params: Record<string, string>): Promise<Calend
   return res.items ?? [];
 }
 
+export const DOCTOR_DAY_TITLE = "หมอเข้า";
+
+// วันคุณหมอเข้าคือ all-day event ชื่อ "หมอเข้า"
+// ให้ Google กรองด้วย q ก่อน จึงไม่ได้รับชื่อของนัดคนไข้กลับมา
+export async function listDoctorDays(timeMin: string, timeMax: string): Promise<string[]> {
+  const events = await listEvents({
+    q: DOCTOR_DAY_TITLE,
+    timeMin,
+    timeMax,
+    fields: "items(id,status,summary,start,end)",
+  });
+  const days = new Set<string>();
+  for (const event of events) {
+    const { date: start } = event.start ?? {};
+    const { date: end } = event.end ?? {};
+    if (event.status === "cancelled" || !start || !event.summary?.trim().startsWith(DOCTOR_DAY_TITLE)) continue;
+    // end.date ของ all-day event คือวันถัดจากวันสุดท้าย
+    let day = start;
+    do {
+      days.add(day);
+      day = new Date(Date.parse(`${day}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+    } while (end && day < end);
+  }
+  return [...days].sort();
+}
+
 export function insertEvent(event: Omit<CalendarEvent, "id">): Promise<CalendarEvent> {
   return call<CalendarEvent>("POST", eventsUrl(), event);
 }

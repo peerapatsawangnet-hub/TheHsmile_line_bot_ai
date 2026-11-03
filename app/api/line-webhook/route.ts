@@ -1,20 +1,32 @@
 import { HTTPFetchError, messagingApi, validateSignature, webhook } from "@line/bot-sdk";
 import { NextRequest, NextResponse } from "next/server";
 import {
+  describeDoctorDays,
+  describeNextAppointment,
   handleAdminPostback,
   handleBookingDetails,
   handleBookingPostback,
-  handleBookingText,
   isAdminAction,
   isBookingEnabled,
   isBookingRequest,
+  startBooking,
 } from "@/lib/booking";
-import { DEFAULT_REPLY } from "@/lib/config";
+import { getDoctorScheduleImage } from "@/lib/booking-config";
+import { LOOKUP_TIMEOUT_MS, THANKS_REPLY } from "@/lib/config";
 import { handoffCard } from "@/lib/flex-cards";
-import { askGemini } from "@/lib/gemini";
-import { notifyAdmin, shouldHandoff } from "@/lib/handoff";
+import { Classification, classifyMessage } from "@/lib/gemini";
+import {
+  isAppointmentChangeCommand,
+  isHandoffCommand,
+  notifyAdmin,
+  notifyEmergency,
+  notifyShadow,
+} from "@/lib/handoff";
 import { getLineClient } from "@/lib/line";
+import { getSettings } from "@/lib/settings";
 import { getFaqCsv } from "@/lib/sheet";
+import { parseMonthText } from "@/lib/thai-datetime";
+import { decide, Decision, fallbackIntent, isAck } from "@/lib/triage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,21 +34,13 @@ export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 export const maxDuration = 30;  // การจองเรียก Calendar หลายครั้ง
 
-async function buildAnswer(text: string): Promise<string> {
-  try {
-    const faq = await getFaqCsv();
-    return (await askGemini(faq, text)) ?? DEFAULT_REPLY;
-  } catch {
-    // getFaqCsv log สาเหตุไว้แล้ว (sheet_unavailable / sheet_empty)
-    return DEFAULT_REPLY;
-  }
-}
+type Message = messagingApi.Message;
 
-async function sendReply(replyToken: string, message: messagingApi.Message): Promise<void> {
+async function sendReply(replyToken: string, messages: Message | Message[]): Promise<void> {
   try {
     await getLineClient().replyMessage({
       replyToken,
-      messages: [message],
+      messages: Array.isArray(messages) ? messages : [messages],
     });
   } catch (err) {
     // reply token ใช้ได้ครั้งเดียว จึงไม่ retry และไม่ throw ต่อ
@@ -47,6 +51,176 @@ async function sendReply(replyToken: string, message: messagingApi.Message): Pro
       detail: err instanceof Error ? err.message : String(err),
     }));
   }
+}
+
+const text = (value: string): Message => ({ type: "text", text: value });
+
+// คืน null ถ้าเกินเวลา เพื่อไม่ให้รวมแล้วเกินงบเวลาของข้อความ
+async function withinLookupBudget<T>(work: Promise<T>): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      console.error(JSON.stringify({ tag: "lookup_timeout" }));
+      resolve(null);
+    }, LOOKUP_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } catch (err) {
+    console.error(JSON.stringify({
+      tag: "lookup_error",
+      status: (err as { status?: number }).status,
+      detail: err instanceof Error ? err.message : String(err),
+    }));
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function classify(message: string): Promise<{ result: Classification | null; faqAvailable: boolean }> {
+  let faq = "";
+  let faqAvailable = true;
+  try {
+    faq = await getFaqCsv();
+  } catch {
+    // getFaqCsv log สาเหตุไว้แล้ว (sheet_unavailable / sheet_empty) ยังจัดประเภทข้อความได้โดยไม่มี FAQ
+    faqAvailable = false;
+  }
+  return { result: await classifyMessage(faq, message), faqAvailable };
+}
+
+// Gemini ใช้ไม่ได้: เดาจากคำสำคัญ ไม่อย่างนั้นแจ้งแอดมิน
+function fallbackDecision(message: string): Decision {
+  const guess = fallbackIntent(message);
+  if (guess === "emergency") return { kind: "emergency" };
+  if (guess === "booking") return { kind: "booking", slots: {} };
+  return { kind: "notify", reason: "ระบบขัดข้อง (Gemini)" };
+}
+
+function describeForShadow(decision: Decision): string {
+  switch (decision.kind) {
+    case "reply": return decision.text;
+    case "thanks": return THANKS_REPLY;
+    case "booking": return "(เข้า flow จองคิว)";
+    case "handoff": return `(การ์ดติดต่อกลับ + แจ้งแอดมิน: ${decision.reason})`;
+    case "appointment": return "(ตอบเวลานัดจากปฏิทิน)";
+    case "doctor": return "(ตอบวันที่คุณหมอเข้า)";
+    case "silent": return "(เงียบ)";
+    case "notify": return `(เงียบ + แจ้งแอดมิน: ${decision.reason})`;
+    case "emergency": return "(เงียบ + แจ้งด่วน)";
+  }
+}
+
+async function act(decision: Decision, userId: string, replyToken: string, message: string): Promise<void> {
+  const now = Date.now();
+  switch (decision.kind) {
+    case "reply":
+      return sendReply(replyToken, text(decision.text));
+    case "thanks":
+      return sendReply(replyToken, text(THANKS_REPLY));
+    case "silent":
+      return;
+    case "notify":
+      return notifyAdmin(userId, decision.reason, message);
+    case "emergency":
+      return notifyEmergency(userId, message);
+    case "handoff":
+      await Promise.all([notifyAdmin(userId, decision.reason, message), sendReply(replyToken, handoffCard())]);
+      return;
+    case "booking": {
+      if (!isBookingEnabled()) return notifyAdmin(userId, "ขอนัด (ระบบจองปิดอยู่)", message);
+      const reply = await startBooking(userId, message, decision.slots);
+      if (reply) await sendReply(replyToken, reply);
+      return;
+    }
+    case "appointment": {
+      const answer = isBookingEnabled() ? await withinLookupBudget(describeNextAppointment(userId, now)) : null;
+      if (answer) return sendReply(replyToken, text(answer));
+      return notifyAdmin(userId, "ถามเวลานัด (ไม่พบนัดในระบบ)", message);
+    }
+    case "doctor": {
+      const { year, month } = parseMonthText(decision.dateText, now);
+      const [answer, image] = isBookingEnabled()
+        ? await Promise.all([
+            withinLookupBudget(describeDoctorDays(year, month, now)),
+            withinLookupBudget(getDoctorScheduleImage(`${year}-${String(month).padStart(2, "0")}`)),
+          ])
+        : [null, null];
+      if (!answer) return notifyAdmin(userId, "ถามวันที่คุณหมอเข้า (ไม่พบในปฏิทิน)", message);
+      const messages: Message[] = [text(answer)];
+      if (image) messages.push({ type: "image", originalContentUrl: image, previewImageUrl: image });
+      return sendReply(replyToken, messages);
+    }
+  }
+}
+
+async function handleText(userId: string, replyToken: string, message: string): Promise<void> {
+  console.log(JSON.stringify({ tag: "line_message", length: message.length }));
+  const settings = await getSettings();
+
+  // ปิดบอท: เงียบทุกข้อความ แต่อาการฉุกเฉินยังต้องถึงแอดมิน
+  if (!settings.enabled) {
+    const { result } = await classify(message);
+    const emergency = result ? result.intent === "emergency" : fallbackIntent(message) === "emergency";
+    if (emergency) await notifyEmergency(userId, message);
+    return;
+  }
+
+  // คำสั่งตรงทำงานแบบเดิมเสมอ
+  if (isHandoffCommand(message)) {
+    const reason = isAppointmentChangeCommand(message) ? "ขอเปลี่ยนหรือยกเลิกนัด" : "ขอคุยกับแอดมิน";
+    console.log(JSON.stringify({ tag: "handoff" }));
+    await Promise.all([notifyAdmin(userId, reason, message), sendReply(replyToken, handoffCard())]);
+    return;
+  }
+
+  if (isBookingEnabled()) {
+    // ลูกค้าที่กำลังกรอกชื่อและเบอร์ต้องอยู่ใน flow ห้ามผ่าน classifier
+    const details = await handleBookingDetails(userId, message);
+    if (details) return sendReply(replyToken, details);
+    if (isBookingRequest(message)) {
+      const reply = await startBooking(userId, message);
+      if (reply) await sendReply(replyToken, reply);
+      return;
+    }
+  }
+
+  if (isAck(message)) return;
+
+  const { result, faqAvailable } = await classify(message);
+  const decision = result ? decide(result, faqAvailable) : fallbackDecision(message);
+  console.log(JSON.stringify({ tag: "decision", kind: decision.kind, fallback: !result }));
+
+  // โหมดทดลอง: ไม่ตอบลูกค้า ส่งสิ่งที่บอทจะทำเข้ากลุ่มแอดมิน แต่เคสฉุกเฉินยังแจ้งจริง
+  if (settings.mode === "shadow") {
+    if (decision.kind === "emergency") await notifyEmergency(userId, message);
+    await notifyShadow(userId, result?.intent ?? "fallback", describeForShadow(decision));
+    return;
+  }
+  await act(decision, userId, replyToken, message);
+}
+
+async function handlePostback(event: webhook.PostbackEvent): Promise<void> {
+  const { postback, replyToken, source } = event;
+  if (!replyToken) return;
+
+  // ปุ่มยืนยันนัดกดได้เฉพาะในกลุ่มแอดมินเท่านั้น
+  if (isAdminAction(postback.data)) {
+    const fromAdminGroup =
+      source?.type === "group" &&
+      (source as webhook.GroupSource).groupId === process.env.ADMIN_GROUP_ID;
+    if (fromAdminGroup) await sendReply(replyToken, await handleAdminPostback(postback.data));
+    return;
+  }
+
+  if (source?.type !== "user") return;
+  // ปิดบอทแล้วไม่ตอบปุ่มในขั้นจองคิว แต่ปุ่มยืนยันมาตามนัดยังใช้ได้
+  const isAttendance = new URLSearchParams(postback.data).get("a") === "attend";
+  if (!isAttendance && !(await getSettings()).enabled) return;
+
+  const reply = await handleBookingPostback(postback.data, (source as webhook.UserSource).userId);
+  if (reply) await sendReply(replyToken, reply);
 }
 
 async function handleEvent(event: webhook.Event): Promise<void> {
@@ -60,65 +234,50 @@ async function handleEvent(event: webhook.Event): Promise<void> {
       return;
     }
 
-    if (event.type === "postback") {
-      const { postback, replyToken, source } = event as webhook.PostbackEvent;
-      if (!replyToken) return;
-
-      // ปุ่มยืนยันนัดกดได้เฉพาะในกลุ่มแอดมินเท่านั้น
-      if (isAdminAction(postback.data)) {
-        const fromAdminGroup =
-          source?.type === "group" &&
-          (source as webhook.GroupSource).groupId === process.env.ADMIN_GROUP_ID;
-        if (fromAdminGroup) await sendReply(replyToken, await handleAdminPostback(postback.data));
-        return;
-      }
-
-      if (source?.type !== "user") return;
-      const reply = await handleBookingPostback(postback.data, (source as webhook.UserSource).userId);
-      if (reply) await sendReply(replyToken, reply);
-      return;
-    }
+    if (event.type === "postback") return await handlePostback(event as webhook.PostbackEvent);
 
     // ตอบเฉพาะแชตส่วนตัว ไม่อย่างนั้นบอทจะตอบทุกข้อความในกลุ่มแอดมิน
     if (event.type !== "message" || event.source?.type !== "user") return;
     const { message, replyToken, source } = event as webhook.MessageEvent;
-    if (!replyToken) return;
+    const { userId } = source as webhook.UserSource;
+    if (!replyToken || !userId) return;
 
-    if (message.type !== "text") {
-      await sendReply(replyToken, { type: "text", text: DEFAULT_REPLY });
-      return;
-    }
-
-    const { text } = message as webhook.TextMessageContent;
-    console.log(JSON.stringify({ tag: "line_message", length: text.length }));
-
-    if (shouldHandoff(text)) {
-      console.log(JSON.stringify({ tag: "handoff" }));
-      await Promise.all([
-        notifyAdmin((source as webhook.UserSource).userId, text),
-        sendReply(replyToken, handoffCard()),
-      ]);
-      return;
-    }
-
-    if (isBookingEnabled()) {
-      const { userId } = source as webhook.UserSource;
-      const reply =
-        (await handleBookingDetails(userId, text)) ??
-        (isBookingRequest(text) ? await handleBookingText(userId) : null);
-      if (reply) {
-        await sendReply(replyToken, reply);
-        return;
-      }
-    }
-
-    await sendReply(replyToken, { type: "text", text: await buildAnswer(text) });
+    // สติกเกอร์ รูป ไฟล์: เงียบ
+    if (message.type !== "text") return;
+    await handleText(userId, replyToken, (message as webhook.TextMessageContent).text);
   } catch (err) {
     console.error(JSON.stringify({
       tag: "unhandled",
       stack: err instanceof Error ? err.stack : String(err),
     }));
   }
+}
+
+// LINE อาจส่งหลายข้อความของลูกค้าคนเดียวกันมาในครั้งเดียว: รวมเป็นข้อความเดียว
+// เพื่อจัดประเภทครั้งเดียวและแจ้งแอดมินครั้งเดียว ตอบด้วย reply token ของข้อความล่าสุด
+function mergeTextMessages(events: webhook.Event[]): webhook.Event[] {
+  const merged: webhook.Event[] = [];
+  const byUser = new Map<string, webhook.MessageEvent>();
+  for (const event of events) {
+    const userId = event.source?.type === "user" ? (event.source as webhook.UserSource).userId : undefined;
+    const isText = event.type === "message" && (event as webhook.MessageEvent).message.type === "text";
+    const earlier = userId && isText ? byUser.get(userId) : undefined;
+    if (!userId || !isText) {
+      merged.push(event);
+      continue;
+    }
+    const current = event as webhook.MessageEvent;
+    if (!earlier) {
+      const copy = { ...current, message: { ...current.message } } as webhook.MessageEvent;
+      byUser.set(userId, copy);
+      merged.push(copy);
+      continue;
+    }
+    const content = earlier.message as webhook.TextMessageContent;
+    content.text = `${content.text}\n${(current.message as webhook.TextMessageContent).text}`;
+    earlier.replyToken = current.replyToken;
+  }
+  return merged;
 }
 
 export async function POST(req: NextRequest) {
@@ -139,7 +298,7 @@ export async function POST(req: NextRequest) {
   try {
     const { events = [] } = JSON.parse(body) as webhook.CallbackRequest;
     // รอ reply ให้เสร็จก่อน return เพราะ Vercel อาจปิด function กลางทาง
-    await Promise.allSettled(events.map(handleEvent));
+    await Promise.allSettled(mergeTextMessages(events).map(handleEvent));
   } catch (err) {
     console.error(JSON.stringify({
       tag: "unhandled",
