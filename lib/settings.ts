@@ -4,6 +4,9 @@ import { getRows } from "./booking-config";
 export type BotSettings = { enabled: boolean; mode: "live" | "shadow" };
 
 const DEFAULTS: BotSettings = { enabled: true, mode: "live" };
+// ตั้ง SETTINGS_CSV_URL ไว้แต่ยังไม่เคยอ่านได้ (เช่น Sheet ช้าตอนเครื่องเพิ่งเริ่ม)
+// ห้ามเดาว่าเป็น live เพราะทีมอาจปิดบอทหรือเปิดโหมดทดลองไว้
+const UNREADABLE: BotSettings = { enabled: true, mode: "shadow" };
 let last: BotSettings | null = null;
 
 export async function getSettings(): Promise<BotSettings> {
@@ -20,8 +23,9 @@ export async function getSettings(): Promise<BotSettings> {
   } catch (err) {
     console.warn(JSON.stringify({
       tag: "settings_unavailable",
+      fallback: last ? "last" : "shadow",
       detail: err instanceof Error ? err.message : String(err),
     }));
-    return last ?? DEFAULTS;
+    return last ?? UNREADABLE;
   }
 }

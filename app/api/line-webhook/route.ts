@@ -78,16 +78,17 @@ async function withinLookupBudget<T>(work: Promise<T>): Promise<T | null> {
   }
 }
 
-async function classify(message: string): Promise<{ result: Classification | null; faqAvailable: boolean }> {
-  let faq = "";
-  let faqAvailable = true;
-  try {
-    faq = await getFaqCsv();
-  } catch {
-    // getFaqCsv log สาเหตุไว้แล้ว (sheet_unavailable / sheet_empty) ยังจัดประเภทข้อความได้โดยไม่มี FAQ
-    faqAvailable = false;
-  }
-  return { result: await classifyMessage(faq, message), faqAvailable };
+// getFaqCsv log สาเหตุไว้แล้ว (sheet_unavailable / sheet_empty) คืน null เพื่อจัดประเภทต่อได้โดยไม่มี FAQ
+function loadFaq(): Promise<string | null> {
+  return getFaqCsv().catch(() => null);
+}
+
+async function classify(
+  message: string,
+  faqPromise: Promise<string | null> = loadFaq(),
+): Promise<{ result: Classification | null; faqAvailable: boolean }> {
+  const faq = await faqPromise;
+  return { result: await classifyMessage(faq ?? "", message), faqAvailable: faq !== null };
 }
 
 // Gemini ใช้ไม่ได้: เดาจากคำสำคัญ ไม่อย่างนั้นแจ้งแอดมิน
@@ -157,11 +158,13 @@ async function act(decision: Decision, userId: string, replyToken: string, messa
 
 async function handleText(userId: string, replyToken: string, message: string): Promise<void> {
   console.log(JSON.stringify({ tag: "line_message", length: message.length }));
+  // อ่าน FAQ พร้อมกับ settings เพื่อเหลือเวลาให้ Gemini มากขึ้น (มี cache 60 วินาที)
+  const faqPromise = loadFaq();
   const settings = await getSettings();
 
   // ปิดบอท: เงียบทุกข้อความ แต่อาการฉุกเฉินยังต้องถึงแอดมิน
   if (!settings.enabled) {
-    const { result } = await classify(message);
+    const { result } = await classify(message, faqPromise);
     const emergency = result ? result.intent === "emergency" : fallbackIntent(message) === "emergency";
     if (emergency) await notifyEmergency(userId, message);
     return;
@@ -188,7 +191,7 @@ async function handleText(userId: string, replyToken: string, message: string): 
 
   if (isAck(message)) return;
 
-  const { result, faqAvailable } = await classify(message);
+  const { result, faqAvailable } = await classify(message, faqPromise);
   const decision = result ? decide(result, faqAvailable) : fallbackDecision(message);
   console.log(JSON.stringify({ tag: "decision", kind: decision.kind, fallback: !result }));
 

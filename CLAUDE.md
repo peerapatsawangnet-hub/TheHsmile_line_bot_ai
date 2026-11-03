@@ -27,7 +27,7 @@ LINE Official Account bot ของคลินิกทันตกรรม Th
 
 ## Env vars
 
-`LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`, `GEMINI_API_KEY`, `SHEET_CSV_URL`, `ADMIN_GROUP_ID` (required: ไม่ตั้งจะ log `admin_group_missing`), `SETTINGS_CSV_URL` (ไม่ตั้งถือว่า `bot_enabled = TRUE`, `bot_mode = live`), `DOCTOR_SCHEDULE_CSV_URL` (optional)
+`LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`, `GEMINI_API_KEY`, `SHEET_CSV_URL`, `ADMIN_GROUP_ID` (required: ไม่ตั้งจะ log `admin_group_missing`), `SETTINGS_CSV_URL` (ไม่ตั้งถือว่า `bot_enabled = TRUE`, `bot_mode = live` ถ้าตั้งไว้แต่ยังไม่เคยอ่านได้ ถือว่า `shadow` อ่านได้แล้วครั้งหนึ่งใช้ค่าล่าสุด), `DOCTOR_SCHEDULE_CSV_URL` (optional)
 
 ระบบจองคิวเปิดเมื่อมีครบ: `ADMIN_GROUP_ID`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY`, `GOOGLE_CALENDAR_ID`, `SERVICES_CSV_URL`, `HOURS_CSV_URL`
 
