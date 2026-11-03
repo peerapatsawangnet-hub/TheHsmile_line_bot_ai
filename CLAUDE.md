@@ -29,6 +29,8 @@ LINE Official Account bot ของคลินิกทันตกรรม Th
 
 `LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`, `GEMINI_API_KEY`, `SHEET_CSV_URL`, `ADMIN_GROUP_ID` (required: ไม่ตั้งจะ log `admin_group_missing`), `SETTINGS_CSV_URL` (ไม่ตั้งถือว่า `bot_enabled = TRUE`, `bot_mode = live` ถ้าตั้งไว้แต่ยังไม่เคยอ่านได้ ถือว่า `shadow` อ่านได้แล้วครั้งหนึ่งใช้ค่าล่าสุด), `DOCTOR_SCHEDULE_CSV_URL` (optional)
 
+Gemini: ตั้ง `VERTEX_PROJECT_ID` (และ `VERTEX_LOCATION` ค่าเริ่มต้น `global`) เพื่อเรียกผ่าน Vertex AI ด้วย service account เดียวกับ Calendar ซึ่งคิดเงินผ่าน billing account และใช้ credit ของ Google Cloud ได้ ไม่ตั้งจะใช้ `GEMINI_API_KEY` ผ่าน AI Studio ซึ่งต้องเติมเงินล่วงหน้า service account ต้องมี role Vertex AI User ในโปรเจกต์นั้น
+
 ระบบจองคิวเปิดเมื่อมีครบ: `ADMIN_GROUP_ID`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY`, `GOOGLE_CALENDAR_ID`, `SERVICES_CSV_URL`, `HOURS_CSV_URL`
 
 - แท็บบริการ: `service,duration_minutes,active,needs_doctor` (`needs_doctor` ว่างถือว่า `TRUE`)

@@ -52,8 +52,28 @@ const RESPONSE_SCHEMA = {
 
 let ai: GoogleGenAI | null = null;
 
+// ตั้ง VERTEX_PROJECT_ID แล้วเรียกผ่าน Vertex AI ด้วย service account เดียวกับ Calendar
+// Vertex AI คิดเงินผ่าน billing account ปกติ ใช้ credit ของ Google Cloud ได้โดยไม่ต้องเติมเงินล่วงหน้า
+// ไม่ตั้งจะใช้ GEMINI_API_KEY ผ่าน AI Studio แบบเดิม
+const VERTEX_PROJECT_ID = process.env.VERTEX_PROJECT_ID;
+const BACKEND = VERTEX_PROJECT_ID ? "vertex" : "studio";
+
 function getClient(): GoogleGenAI {
-  ai ??= new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  ai ??= VERTEX_PROJECT_ID
+    ? new GoogleGenAI({
+        vertexai: true,
+        project: VERTEX_PROJECT_ID,
+        location: process.env.VERTEX_LOCATION ?? "global",
+        googleAuthOptions: {
+          credentials: {
+            client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+            // Vercel เก็บ newline ใน env เป็น \n
+            private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+          },
+          scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+        },
+      })
+    : new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
   return ai;
 }
 
@@ -135,6 +155,7 @@ export async function classifyMessage(faqCsv: string, question: string): Promise
       confidence: result?.confidence,
       parsed: Boolean(result),
       latencyMs: Date.now() - startedAt,
+      backend: BACKEND,
     }));
     return result;
   } catch (err) {
@@ -142,10 +163,12 @@ export async function classifyMessage(faqCsv: string, question: string): Promise
       console.error(JSON.stringify({
         tag: "gemini_timeout",
         latencyMs: Date.now() - startedAt,
+        backend: BACKEND,
       }));
     } else {
       console.error(JSON.stringify({
         tag: "gemini_error",
+        backend: BACKEND,
         status: err instanceof ApiError ? err.status : undefined,
         detail: err instanceof Error ? err.message : String(err),
       }));
