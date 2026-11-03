@@ -1,6 +1,7 @@
 import { ApiError, GoogleGenAI, Type } from "@google/genai";
 import {
   GEMINI_MODEL,
+  GEMINI_THINKING_LEVEL,
   GEMINI_TIMEOUT_MS,
   MAX_OUTPUT_TOKENS,
   TEMPERATURE,
@@ -100,6 +101,7 @@ export async function classifyMessage(faqCsv: string, question: string): Promise
         systemInstruction: buildSystemPrompt(),
         temperature: TEMPERATURE,
         maxOutputTokens: MAX_OUTPUT_TOKENS,
+        thinkingConfig: { thinkingLevel: GEMINI_THINKING_LEVEL },
         responseMimeType: "application/json",
         responseSchema: RESPONSE_SCHEMA,
         abortSignal,

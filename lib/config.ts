@@ -1,6 +1,11 @@
+import { ThinkingLevel } from "@google/genai";
+
 export const GEMINI_MODEL = "gemini-3.5-flash";
 export const TEMPERATURE = 1.0;          // ห้ามลด: Gemini 3.x จะตอบเพี้ยน
 export const MAX_OUTPUT_TOKENS = 1024;   // Gemini 3.x นับ thinking + output รวมกัน
+// จัดประเภทข้อความไม่ต้องคิดลึก ค่าเริ่มต้นคิดนานจนเกิน 7 วินาทีและใช้ token เกินครึ่ง
+// ไม่ใช้ MINIMAL เพราะเคสฉุกเฉินต้องจัดถูกทุกครั้ง
+export const GEMINI_THINKING_LEVEL = ThinkingLevel.LOW;
 export const SHEET_CACHE_MS = 60_000;
 export const SHEET_TIMEOUT_MS = 3_000;
 export const GEMINI_TIMEOUT_MS = 7_000;  // รวม sheet แล้วต้องไม่เกินงบ 10 วินาที
