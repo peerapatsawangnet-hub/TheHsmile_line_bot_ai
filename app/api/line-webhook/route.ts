@@ -32,8 +32,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 // ไม่ให้ Next.js cache การเรียก LINE หรือ Google
 export const fetchCache = "force-no-store";
-// การจองเรียก Calendar หลายครั้ง และช่วงทดสอบรอ Gemini ได้ถึง 20 วินาที
-export const maxDuration = 60;
+export const maxDuration = 30;  // การจองเรียก Calendar หลายครั้ง
 
 type Message = messagingApi.Message;
 
