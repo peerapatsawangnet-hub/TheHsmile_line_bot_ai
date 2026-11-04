@@ -99,14 +99,28 @@ function fallbackDecision(message: string): Decision {
   return { kind: "notify", reason: "ระบบขัดข้อง (Gemini)" };
 }
 
-function describeForShadow(decision: Decision): string {
+async function doctorAnswer(dateText: string | undefined, now: number): Promise<{ answer: string | null; image: string | null }> {
+  if (!isBookingEnabled()) return { answer: null, image: null };
+  const { year, month } = parseMonthText(dateText, now);
+  const [answer, image] = await Promise.all([
+    withinLookupBudget(describeDoctorDays(year, month, now)),
+    withinLookupBudget(getDoctorScheduleImage(`${year}-${String(month).padStart(2, "0")}`)),
+  ]);
+  return { answer, image };
+}
+
+async function describeForShadow(decision: Decision): Promise<string> {
   switch (decision.kind) {
     case "reply": return decision.text;
     case "thanks": return THANKS_REPLY;
     case "booking": return "(เข้า flow จองคิว)";
     case "handoff": return `(การ์ดติดต่อกลับ + แจ้งแอดมิน: ${decision.reason})`;
     case "appointment": return "(ตอบเวลานัดจากปฏิทิน)";
-    case "doctor": return "(ตอบวันที่คุณหมอเข้า)";
+    case "doctor": {
+      const { answer, image } = await doctorAnswer(decision.dateText, Date.now());
+      if (!answer) return "(เงียบ + แจ้งแอดมิน: ถามวันที่คุณหมอเข้า (ไม่พบในปฏิทิน))";
+      return `${answer}\n${image ? `+ รูป: ${image}` : "(ไม่มีรูปตารางเดือนนี้)"}`;
+    }
     case "silent": return "(เงียบ)";
     case "notify": return `(เงียบ + แจ้งแอดมิน: ${decision.reason})`;
     case "emergency": return "(เงียบ + แจ้งด่วน)";
@@ -141,13 +155,7 @@ async function act(decision: Decision, userId: string, replyToken: string, messa
       return notifyAdmin(userId, "ถามเวลานัด (ไม่พบนัดในระบบ)", message);
     }
     case "doctor": {
-      const { year, month } = parseMonthText(decision.dateText, now);
-      const [answer, image] = isBookingEnabled()
-        ? await Promise.all([
-            withinLookupBudget(describeDoctorDays(year, month, now)),
-            withinLookupBudget(getDoctorScheduleImage(`${year}-${String(month).padStart(2, "0")}`)),
-          ])
-        : [null, null];
+      const { answer, image } = await doctorAnswer(decision.dateText, now);
       if (!answer) return notifyAdmin(userId, "ถามวันที่คุณหมอเข้า (ไม่พบในปฏิทิน)", message);
       const messages: Message[] = [text(answer)];
       if (image) messages.push({ type: "image", originalContentUrl: image, previewImageUrl: image });
@@ -198,7 +206,7 @@ async function handleText(userId: string, replyToken: string, message: string): 
   // โหมดทดลอง: ไม่ตอบลูกค้า ส่งสิ่งที่บอทจะทำเข้ากลุ่มแอดมิน แต่เคสฉุกเฉินยังแจ้งจริง
   if (settings.mode === "shadow") {
     if (decision.kind === "emergency") await notifyEmergency(userId, message);
-    await notifyShadow(userId, result?.intent ?? "fallback", describeForShadow(decision));
+    await notifyShadow(userId, result?.intent ?? "fallback", await describeForShadow(decision));
     return;
   }
   await act(decision, userId, replyToken, message);
