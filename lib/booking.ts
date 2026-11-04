@@ -635,17 +635,32 @@ export async function describeNextAppointment(userId: string, now: number): Prom
   return `นัดของคุณคือ${formatWhen(next.start?.dateTime ?? "")} ค่ะ 😊`;
 }
 
-// คืน null เมื่อยังไม่มีการลงวันคุณหมอเข้าในเดือนนั้น
+// "4, 11 และ 18"
+function dayList(days: string[]): string {
+  const numbers = days.map((day) => String(Number(day.slice(8))));
+  return numbers.length > 1 ? `${numbers.slice(0, -1).join(", ")} และ ${numbers.at(-1)}` : numbers[0];
+}
+
+// วันที่คุณหมอเข้าตั้งแต่วันนี้ถึงสิ้นเดือน คืน null เมื่อเดือนนั้นผ่านไปแล้ว
 export async function describeDoctorDays(year: number, month: number, now: number): Promise<string | null> {
   const first = `${year}-${pad(month)}-01`;
   const last = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
   const from = first < dateAt(now, 0) ? dateAt(now, 0) : first;
   if (from > last) return null;
-  const days = await listDoctorDays(toIso(from, 0), endOfDay(last));
-  const inMonth = days.filter((day) => day >= from && day <= last);
-  if (inMonth.length === 0) return null;
-  const list = inMonth.map((day) => String(Number(day.slice(8)))).join(", ");
-  return `เดือน${MONTH_SHORT[month - 1]} คุณหมอเข้าวันที่ ${list} ค่ะ 😊`;
+  const monthName = `เดือน${MONTH_SHORT[month - 1]}`;
+
+  const [doctorDays, hours] = await Promise.all([listDoctorDays(toIso(from, 0), endOfDay(last)), getBookingHours()]);
+  const inMonth = doctorDays.filter((day) => day >= from && day <= last);
+  if (inMonth.length > 0) return `${monthName} คุณหมอเข้าวันที่ ${dayList(inMonth)} ค่ะ 😊`;
+
+  // ไม่ได้ลง event หมอเข้า: คุณหมอเข้าทุกวันที่คลินิกเปิด บอกวันปิดจากแท็บเวลาจองแทน
+  const closed: string[] = [];
+  for (let day = from; day <= last; day = new Date(Date.parse(`${day}T00:00:00Z`) + DAY_MS).toISOString().slice(0, 10)) {
+    if (rangesFor(day, hours).length === 0) closed.push(day);
+  }
+  return closed.length > 0
+    ? `${monthName} คุณหมอเข้าทุกวันที่คลินิกเปิด โดยคลินิกปิดวันที่ ${dayList(closed)} ค่ะ 😊`
+    : `${monthName} คุณหมอเข้าทุกวันค่ะ 😊`;
 }
 
 async function notifyCustomer(userId: string | null | undefined, text: string): Promise<boolean> {
