@@ -281,6 +281,13 @@ function existingBookingMessage(event: CalendarEvent): Message {
   return {
     type: "text",
     text: `คุณลูกค้ามีนัดอยู่แล้ว${formatWhen(event.start?.dateTime ?? "")} ค่ะ หากต้องการเปลี่ยนแปลง พิมพ์ "เปลี่ยนนัด" หรือโทร ${CLINIC_PHONE} ได้เลยนะคะ`,
+    // ส่งเป็นข้อความ จึงเข้าคำสั่งตรงเดียวกับที่ลูกค้าพิมพ์เอง: แจ้งแอดมินให้จัดการ
+    quickReply: {
+      items: ["เลื่อนนัด", "ยกเลิกนัด"].map((label) => ({
+        type: "action" as const,
+        action: { type: "message" as const, label, text: label },
+      })),
+    },
   };
 }
 
