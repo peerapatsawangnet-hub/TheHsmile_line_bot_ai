@@ -99,9 +99,15 @@ function fallbackDecision(message: string): Decision {
   return { kind: "notify", reason: "ระบบขัดข้อง (Gemini)" };
 }
 
-async function doctorAnswer(dateText: string | undefined, now: number): Promise<{ answer: string | null; image: string | null }> {
+async function doctorAnswer(
+  dateText: string | undefined,
+  message: string,
+  now: number,
+): Promise<{ answer: string | null; image: string | null }> {
   if (!isBookingEnabled()) return { answer: null, image: null };
-  const { year, month } = parseMonthText(dateText, now);
+  // Gemini มักไม่ใส่ "เดือนหน้า" ใน date_text จึงดูจากข้อความลูกค้า
+  // ไม่อ่านชื่อเดือนย่อจากข้อความ เพราะ "มีคิว" จะถูกอ่านเป็น "มีค"
+  const { year, month } = parseMonthText(/เดือนหน้า/.test(message) ? "เดือนหน้า" : dateText, now);
   const [answer, image] = await Promise.all([
     withinLookupBudget(describeDoctorDays(year, month, now)),
     withinLookupBudget(getDoctorScheduleImage(`${year}-${String(month).padStart(2, "0")}`)),
@@ -110,9 +116,9 @@ async function doctorAnswer(dateText: string | undefined, now: number): Promise<
 }
 
 // ส่งรูปเข้ากลุ่มแอดมินด้วย เพื่อให้เห็นเหมือนที่ลูกค้าจะได้รับ
-async function previewForShadow(decision: Decision): Promise<{ text: string; image?: string | null }> {
+async function previewForShadow(decision: Decision, message: string): Promise<{ text: string; image?: string | null }> {
   if (decision.kind !== "doctor") return { text: describeForShadow(decision) };
-  const { answer, image } = await doctorAnswer(decision.dateText, Date.now());
+  const { answer, image } = await doctorAnswer(decision.dateText, message, Date.now());
   if (!answer) return { text: "(เงียบ + แจ้งแอดมิน: ถามวันที่คุณหมอเข้า (ไม่พบในปฏิทิน))" };
   return { text: image ? answer : `${answer}\n(ไม่มีรูปตารางเดือนนี้)`, image };
 }
@@ -159,7 +165,7 @@ async function act(decision: Decision, userId: string, replyToken: string, messa
       return notifyAdmin(userId, "ถามเวลานัด (ไม่พบนัดในระบบ)", message);
     }
     case "doctor": {
-      const { answer, image } = await doctorAnswer(decision.dateText, now);
+      const { answer, image } = await doctorAnswer(decision.dateText, message, now);
       if (!answer) return notifyAdmin(userId, "ถามวันที่คุณหมอเข้า (ไม่พบในปฏิทิน)", message);
       const messages: Message[] = [text(answer)];
       if (image) messages.push({ type: "image", originalContentUrl: image, previewImageUrl: image });
@@ -210,7 +216,7 @@ async function handleText(userId: string, replyToken: string, message: string): 
   // โหมดทดลอง: ไม่ตอบลูกค้า ส่งสิ่งที่บอทจะทำเข้ากลุ่มแอดมิน แต่เคสฉุกเฉินยังแจ้งจริง
   if (settings.mode === "shadow") {
     if (decision.kind === "emergency") await notifyEmergency(userId, message);
-    const preview = await previewForShadow(decision);
+    const preview = await previewForShadow(decision, message);
     await notifyShadow(userId, result?.intent ?? "fallback", preview.text, preview.image);
     return;
   }
