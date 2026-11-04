@@ -88,10 +88,15 @@ export async function notifyEmergency(userId: string | undefined, message: strin
   if (!mentioned) await pushToAdmin([{ type: "text", text: body }], "emergency_notify_failed");
 }
 
-export async function notifyShadow(userId: string | undefined, intent: string, wouldReply: string): Promise<void> {
+export async function notifyShadow(
+  userId: string | undefined,
+  intent: string,
+  wouldReply: string,
+  image?: string | null,
+): Promise<void> {
   const name = await getDisplayName(userId);
-  await pushToAdmin([{
-    type: "text",
-    text: `🧪 [ทดลอง] ${name} · ${intent} · บอทจะตอบ: ${clip(wouldReply)}`,
-  }], "shadow_notify_failed");
+  await pushToAdmin([
+    { type: "text", text: `🧪 [ทดลอง] ${name} · ${intent} · บอทจะตอบ: ${clip(wouldReply)}` },
+    ...(image ? [{ type: "image" as const, originalContentUrl: image, previewImageUrl: image }] : []),
+  ], "shadow_notify_failed");
 }

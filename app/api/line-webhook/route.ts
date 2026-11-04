@@ -109,18 +109,22 @@ async function doctorAnswer(dateText: string | undefined, now: number): Promise<
   return { answer, image };
 }
 
-async function describeForShadow(decision: Decision): Promise<string> {
+// ส่งรูปเข้ากลุ่มแอดมินด้วย เพื่อให้เห็นเหมือนที่ลูกค้าจะได้รับ
+async function previewForShadow(decision: Decision): Promise<{ text: string; image?: string | null }> {
+  if (decision.kind !== "doctor") return { text: describeForShadow(decision) };
+  const { answer, image } = await doctorAnswer(decision.dateText, Date.now());
+  if (!answer) return { text: "(เงียบ + แจ้งแอดมิน: ถามวันที่คุณหมอเข้า (ไม่พบในปฏิทิน))" };
+  return { text: image ? answer : `${answer}\n(ไม่มีรูปตารางเดือนนี้)`, image };
+}
+
+function describeForShadow(decision: Decision): string {
   switch (decision.kind) {
     case "reply": return decision.text;
     case "thanks": return THANKS_REPLY;
     case "booking": return "(เข้า flow จองคิว)";
     case "handoff": return `(การ์ดติดต่อกลับ + แจ้งแอดมิน: ${decision.reason})`;
     case "appointment": return "(ตอบเวลานัดจากปฏิทิน)";
-    case "doctor": {
-      const { answer, image } = await doctorAnswer(decision.dateText, Date.now());
-      if (!answer) return "(เงียบ + แจ้งแอดมิน: ถามวันที่คุณหมอเข้า (ไม่พบในปฏิทิน))";
-      return `${answer}\n${image ? `+ รูป: ${image}` : "(ไม่มีรูปตารางเดือนนี้)"}`;
-    }
+    case "doctor": return "(ตอบวันที่คุณหมอเข้า)";
     case "silent": return "(เงียบ)";
     case "notify": return `(เงียบ + แจ้งแอดมิน: ${decision.reason})`;
     case "emergency": return "(เงียบ + แจ้งด่วน)";
@@ -206,7 +210,8 @@ async function handleText(userId: string, replyToken: string, message: string): 
   // โหมดทดลอง: ไม่ตอบลูกค้า ส่งสิ่งที่บอทจะทำเข้ากลุ่มแอดมิน แต่เคสฉุกเฉินยังแจ้งจริง
   if (settings.mode === "shadow") {
     if (decision.kind === "emergency") await notifyEmergency(userId, message);
-    await notifyShadow(userId, result?.intent ?? "fallback", await describeForShadow(decision));
+    const preview = await previewForShadow(decision);
+    await notifyShadow(userId, result?.intent ?? "fallback", preview.text, preview.image);
     return;
   }
   await act(decision, userId, replyToken, message);
