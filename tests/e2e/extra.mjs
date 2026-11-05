@@ -82,6 +82,19 @@ export async function run(c) {
   r = await text("เปิดกี่โมง", "Ufaq");
   check("faq -> answer, markdown stripped", r.msg?.text === "เปิด 10:00-19:00 น. ค่ะ", r.msg?.text);
   const body = c.lastGeminiBody();
+
+  // the sheet's own wording goes out, not Gemini's summary, with a button for พิมพ์ "..."
+  plan.set("จัดฟันเท่าไหร่คะ", cls("faq", { found_in_faq: true, faq_question: "จัดฟันราคาเท่าไหร่", reply: "ประมาณหลักพันค่ะ" }));
+  r = await text("จัดฟันเท่าไหร่คะ", "Ufaq");
+  check("faq -> sheet answer verbatim", r.msg?.text === "จัดฟันเริ่มต้น 1,111 บาทค่ะ\nหากสนใจรายละเอียด พิมพ์คำว่า “ขอรายละเอียดการจัดฟัน” ได้เลยค่ะ", r.msg?.text);
+  const detailBtn = r.msg?.quickReply?.items?.[0]?.action;
+  check("faq -> button from พิมพ์คำว่า", detailBtn?.type === "message" && detailBtn.text === "ขอรายละเอียดการจัดฟัน" && detailBtn.label.length <= 20, JSON.stringify(detailBtn));
+  plan.set("ขอรายละเอียดการจัดฟัน", cls("faq", { found_in_faq: true, faq_question: "ขอรายละเอียดการจัดฟัน", reply: "มีหลายโปรค่ะ" }));
+  r = await text(detailBtn?.text ?? "", "Ufaq");
+  check("tap button -> full multi-line details", r.msg?.text === "🦷 โปร A\n* เดือน 1: 1,111\n* เดือน 2–11: 222" && !r.msg.quickReply, r.msg?.text);
+  plan.set("how much are braces", cls("faq", { found_in_faq: true, faq_question: "จัดฟันราคาเท่าไหร่", reply: "Braces start at 1,111 baht." }));
+  r = await text("how much are braces", "Ufaq");
+  check("english question -> Gemini's English reply", r.msg?.text === "Braces start at 1,111 baht.", r.msg?.text);
   const sys = body.systemInstruction?.parts?.[0]?.text ?? "";
   const userTurn = body.contents?.[0]?.parts?.[0]?.text ?? "";
   check("prompt has intent guide + constraints", sys.includes("<intent_guide>") && sys.includes("- emergency:") && sys.includes("<constraints>"));

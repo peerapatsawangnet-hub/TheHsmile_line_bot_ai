@@ -47,6 +47,16 @@ async function fetchRawCsv(): Promise<string> {
   return res.text();
 }
 
+const questionKey = (text: string) => text.toLowerCase().replace(/[\s"'“”‘’?？!.,]/g, "");
+
+// คำตอบตรงตัวจาก Sheet ของแถวที่ Gemini เลือก ราคาและโปรโมชันจะไม่ถูกเขียนใหม่หรือย่อ
+export function findFaqAnswer(faqCsv: string, question: string | undefined): string | null {
+  if (!question) return null;
+  const { data } = Papa.parse<FaqRow>(faqCsv, { header: true, skipEmptyLines: true });
+  const wanted = questionKey(question);
+  return data.find((row) => questionKey(row.question ?? "") === wanted)?.answer?.trim() || null;
+}
+
 export async function getFaqCsv(): Promise<string> {
   if (cache && Date.now() - cache.fetchedAt < SHEET_CACHE_MS) {
     return cache.csv;

@@ -43,7 +43,10 @@ let servicesCsv = "service,duration_minutes,active,needs_doctor\nขูดหิ
 // settings tab unreachable until the extra suite checks the cold-start fallback
 let settingsDown = true;
 let settingsCsv = "key,value\nbot_enabled,TRUE\nbot_mode,live\n";
-const faqCsv = "category,question,answer,active\nเวลา,เปิดกี่โมง,เปิด 10:00-19:00 น.,TRUE\n";
+// fake prices; the second and third rows check verbatim multi-line answers and tap buttons
+const faqCsv = "category,question,answer,active\nเวลา,เปิดกี่โมง,เปิด 10:00-19:00 น.,TRUE\n" +
+  "ราคา,จัดฟันราคาเท่าไหร่,\"จัดฟันเริ่มต้น 1,111 บาทค่ะ\nหากสนใจรายละเอียด พิมพ์คำว่า “ขอรายละเอียดการจัดฟัน” ได้เลยค่ะ\",TRUE\n" +
+  "ราคา,ขอรายละเอียดการจัดฟัน,\"🦷 โปร A\n* เดือน 1: 1,111\n* เดือน 2–11: 222\",TRUE\n";
 // Gemini mock: question -> classification, or "500" / "maxtokens" / "badjson"
 const plan = new Map();
 let geminiCalls = 0;

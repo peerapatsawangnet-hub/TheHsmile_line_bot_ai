@@ -14,6 +14,7 @@ import {
   startReschedule,
 } from "@/lib/booking";
 import { getDoctorScheduleImage } from "@/lib/booking-config";
+import { faqButtons, faqReplyText } from "@/lib/faq-reply";
 import { LOOKUP_TIMEOUT_MS, THANKS_REPLY } from "@/lib/config";
 import { handoffCard } from "@/lib/flex-cards";
 import { Classification, classifyMessage } from "@/lib/gemini";
@@ -169,7 +170,7 @@ async function act(decision: Decision, userId: string, replyToken: string, messa
   const now = Date.now();
   switch (decision.kind) {
     case "reply":
-      return sendReply(replyToken, text(decision.text));
+      return sendReply(replyToken, { ...text(decision.text), quickReply: faqButtons(decision.text) });
     case "thanks":
       return sendReply(replyToken, text(THANKS_REPLY));
     case "silent":
@@ -246,7 +247,10 @@ async function handleText(userId: string, replyToken: string, message: string): 
   if (isAck(message)) return;
 
   const { result, faqAvailable } = await classify(message, faqPromise);
-  const decision = result ? decide(result, faqAvailable) : fallbackDecision(message);
+  let decision = result ? decide(result, faqAvailable) : fallbackDecision(message);
+  if (result && decision.kind === "reply") {
+    decision = { kind: "reply", text: faqReplyText(await faqPromise, result, message) };
+  }
   console.log(JSON.stringify({ tag: "decision", kind: decision.kind, fallback: !result }));
 
   // โหมดทดลอง: ไม่ตอบลูกค้า ส่งสิ่งที่บอทจะทำเข้ากลุ่มแอดมิน แต่เคสฉุกเฉินยังแจ้งจริง

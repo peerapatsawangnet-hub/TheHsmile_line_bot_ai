@@ -22,6 +22,8 @@ export type Classification = {
   confidence: "high" | "low";
   foundInFaq: boolean;
   reply: string;
+  // question ของแถว FAQ ที่ใช้ตอบ บอทส่งคำตอบจาก Sheet ตรงตัวแทน reply ที่ Gemini เขียน
+  faqQuestion?: string;
   multiplePatients: boolean;
   slots: Slots;
 };
@@ -33,6 +35,7 @@ const RESPONSE_SCHEMA = {
     confidence: { type: Type.STRING, enum: ["high", "low"] },
     found_in_faq: { type: Type.BOOLEAN },
     reply: { type: Type.STRING },
+    faq_question: { type: Type.STRING },
     multiple_patients: { type: Type.BOOLEAN },
     slots: {
       type: Type.OBJECT,
@@ -96,6 +99,7 @@ function parse(raw: string): Classification | null {
     foundInFaq: data.found_in_faq === true,
     // ไม่ส่ง markdown ให้ลูกค้า
     reply: (str(data.reply) ?? "").replace(/\*\*|#|`/g, "").trim(),
+    faqQuestion: str(data.faq_question),
     multiplePatients: data.multiple_patients === true,
     // ไม่เก็บชื่อและเบอร์จาก Gemini: flow จองถามเองหลังกันคิว
     slots: {
