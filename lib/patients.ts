@@ -26,8 +26,12 @@ export function phonesIn(cell: string): string[] {
 }
 
 // ชื่อแรกโดยตัดคำนำหน้า ใช้เทียบกับชื่อที่ลูกค้าพิมพ์
+// ข้อความไทยที่ก๊อปมามักมีอักขระที่มองไม่เห็นปน จึงตัดทิ้งก่อนเทียบ
 export function firstName(name: string): string {
   return name
+    .normalize("NFC")
+    .replace(/[​-‍⁠﻿]/g, "")
+    .trim()
     .replace(/^(คุณ|นาย|นางสาว|นาง|น\.ส\.|ด\.ช\.|ด\.ญ\.|เด็กชาย|เด็กหญิง|mr\.?|mrs\.?|ms\.?|miss)\s*/i, "")
     .trim()
     .split(/\s+/)[0]
@@ -93,8 +97,12 @@ export function matchDn(patients: Patient[], name: string, phone: string): strin
 export async function findDn(name: string, phone: string): Promise<string | null> {
   if (!process.env.PATIENTS_SHEET_ID) return null;
   try {
-    const dn = matchDn(await loadPatients(), name, phone);
-    console.log(JSON.stringify({ tag: "patient_lookup", found: Boolean(dn) }));
+    const patients = await loadPatients();
+    const dn = matchDn(patients, name, phone);
+    // นับอย่างเดียว ไม่มีข้อมูลคนไข้: rows=0 คืออ่านผิดไฟล์/แท็บ phoneMatches=0 คือเบอร์ไม่อยู่ในไฟล์
+    // phoneMatches>0 แต่ไม่พบ คือชื่อแรกไม่ตรง
+    const phoneMatches = patients.filter((patient) => patient.phones.includes(phone)).length;
+    console.log(JSON.stringify({ tag: "patient_lookup", found: Boolean(dn), rows: patients.length, phoneMatches }));
     return dn;
   } catch (err) {
     console.error(JSON.stringify({

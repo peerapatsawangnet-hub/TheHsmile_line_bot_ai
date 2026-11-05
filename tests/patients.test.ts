@@ -23,6 +23,7 @@ test("firstName drops titles", () => {
   assert.equal(firstName("นางสาวสมหญิง รักดี"), "สมหญิง");
   assert.equal(firstName("คุณ สมชาย ใจดี"), "สมชาย");
   assert.equal(firstName("Mr. John Smith"), "john");
+  assert.equal(firstName("​มาร์ค​ สุดหล่อ"), "มาร์ค");
 });
 
 test("parsePatients reads by header name and skips rows without DN or phone", () => {
