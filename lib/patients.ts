@@ -67,16 +67,47 @@ function toPatients(body: string[][], dn: number, name: number, phone: number): 
     .filter((patient) => patient.dn && patient.phones.length > 0);
 }
 
-async function loadPatients(): Promise<Patient[]> {
-  if (cache && Date.now() - cache.at < PATIENTS_CACHE_MS) return cache.patients;
+async function get<T>(path: string): Promise<T> {
   const id = encodeURIComponent(process.env.PATIENTS_SHEET_ID ?? "");
-  const range = encodeURIComponent(process.env.PATIENTS_SHEET_TAB || "A:Z");
-  const res = await getAuth().request<{ values?: string[][] }>({
-    url: `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${range}?valueRenderOption=FORMATTED_VALUE`,
+  const res = await getAuth().request<T>({
+    url: `https://sheets.googleapis.com/v4/spreadsheets/${id}${path}`,
     timeout: PATIENTS_TIMEOUT_MS,
     retry: false,
   });
-  const patients = parsePatients(res.data.values ?? []);
+  return res.data;
+}
+
+// ชื่อแท็บในรูปแบบ range ของ Sheets: ครอบด้วย ' และ ' ข้างในเขียนซ้ำ
+const tabRange = (title: string) => `'${title.replace(/'/g, "''")}'`;
+
+// คลินิกแยกแท็บตามเดือน จึงอ่านทุกแท็บแล้วรวมกัน แท็บที่ไม่มีหัวคอลัมน์ข้ามไป
+// ตั้ง PATIENTS_SHEET_TAB แล้วอ่านแท็บเดียว
+async function readTabs(): Promise<string[][][]> {
+  const tab = process.env.PATIENTS_SHEET_TAB;
+  const titles = tab
+    ? [tab]
+    : ((await get<{ sheets?: { properties?: { title?: string } }[] }>("?fields=sheets.properties.title")).sheets ?? [])
+        .map((sheet) => sheet.properties?.title ?? "")
+        .filter(Boolean);
+  if (titles.length === 0) return [];
+  const ranges = titles.map((title) => `ranges=${encodeURIComponent(tabRange(title))}`).join("&");
+  const data = await get<{ valueRanges?: { values?: string[][] }[] }>(
+    `/values:batchGet?${ranges}&valueRenderOption=FORMATTED_VALUE`,
+  );
+  return (data.valueRanges ?? []).map((range) => range.values ?? []);
+}
+
+async function loadPatients(): Promise<Patient[]> {
+  if (cache && Date.now() - cache.at < PATIENTS_CACHE_MS) return cache.patients;
+  const tabs = (await readTabs()).map((rows) => {
+    try {
+      return parsePatients(rows);
+    } catch {
+      return null;
+    }
+  });
+  if (tabs.every((tab) => tab === null)) throw new Error("patients_header_missing");
+  const patients = tabs.flatMap((tab) => tab ?? []);
   cache = { at: Date.now(), patients };
   return patients;
 }
