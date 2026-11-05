@@ -10,6 +10,7 @@ import {
   isBookingEnabled,
   isBookingRequest,
   startBooking,
+  startReschedule,
 } from "@/lib/booking";
 import { getDoctorScheduleImage } from "@/lib/booking-config";
 import { LOOKUP_TIMEOUT_MS, THANKS_REPLY } from "@/lib/config";
@@ -18,6 +19,7 @@ import { Classification, classifyMessage } from "@/lib/gemini";
 import {
   isAppointmentChangeCommand,
   isHandoffCommand,
+  isRescheduleCommand,
   notifyAdmin,
   notifyEmergency,
   notifyShadow,
@@ -136,12 +138,21 @@ function describeForShadow(decision: Decision): string {
     case "thanks": return THANKS_REPLY;
     case "booking": return "(เข้า flow จองคิว)";
     case "handoff": return `(การ์ดติดต่อกลับ + แจ้งแอดมิน: ${decision.reason})`;
+    case "reschedule": return "(ให้เลือกวันเวลาใหม่ ถ้าไม่พบนัดผ่าน LINE ส่งการ์ดติดต่อกลับ + แจ้งแอดมิน)";
     case "appointment": return "(ตอบเวลานัดจากปฏิทิน)";
     case "doctor": return "(ตอบวันที่คุณหมอเข้า)";
     case "silent": return "(เงียบ)";
     case "notify": return `(เงียบ + แจ้งแอดมิน: ${decision.reason})`;
     case "emergency": return "(เงียบ + แจ้งด่วน)";
   }
+}
+
+// นัดที่จองผ่าน LINE ให้ลูกค้าเลือกเวลาใหม่เอง นัดอื่นหรือระบบขัดข้อง ส่งต่อแอดมินแบบเดิม
+async function reschedule(userId: string, replyToken: string, message: string): Promise<void> {
+  const reply = isBookingEnabled() ? await startReschedule(userId) : null;
+  if (reply) return sendReply(replyToken, reply);
+  console.log(JSON.stringify({ tag: "handoff" }));
+  await Promise.all([notifyAdmin(userId, "ขอเปลี่ยนนัด", message), sendReply(replyToken, handoffCard())]);
 }
 
 async function act(decision: Decision, userId: string, replyToken: string, message: string): Promise<void> {
@@ -160,6 +171,8 @@ async function act(decision: Decision, userId: string, replyToken: string, messa
     case "handoff":
       await Promise.all([notifyAdmin(userId, decision.reason, message), sendReply(replyToken, handoffCard())]);
       return;
+    case "reschedule":
+      return reschedule(userId, replyToken, message);
     case "booking": {
       if (!isBookingEnabled()) return notifyAdmin(userId, "ขอนัด (ระบบจองปิดอยู่)", message);
       const reply = await startBooking(userId, message, decision.slots);
@@ -198,6 +211,7 @@ async function handleText(userId: string, replyToken: string, message: string): 
   }
 
   // คำสั่งตรงทำงานแบบเดิมเสมอ
+  if (isRescheduleCommand(message)) return reschedule(userId, replyToken, message);
   if (isHandoffCommand(message)) {
     const reason = isAppointmentChangeCommand(message) ? "ขอเปลี่ยนหรือยกเลิกนัด" : "ขอคุยกับแอดมิน";
     console.log(JSON.stringify({ tag: "handoff" }));

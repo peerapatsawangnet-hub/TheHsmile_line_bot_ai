@@ -26,6 +26,11 @@ export function isAppointmentChangeCommand(message: string): boolean {
   return includesAny(message, APPOINTMENT_CHANGE_COMMANDS);
 }
 
+// เปลี่ยนหรือเลื่อนนัด ไม่รวมยกเลิก ลูกค้าเลือกเวลาใหม่เองได้ถ้านัดจองผ่าน LINE
+export function isRescheduleCommand(message: string): boolean {
+  return includesAny(message, ["เปลี่ยนนัด", "เลื่อนนัด"]) && !message.includes("ยกเลิก");
+}
+
 export function isHandoffCommand(message: string): boolean {
   return includesAny(message, HANDOFF_COMMANDS) || isAppointmentChangeCommand(message);
 }

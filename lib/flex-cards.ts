@@ -7,10 +7,11 @@ export function bookingRequestCard(
   summary: string,
   when: string,
   eventId: string,
+  title = "🗓️ คำขอนัดใหม่",
 ): messagingApi.FlexMessage {
   return {
     type: "flex",
-    altText: `🗓️ คำขอนัดใหม่ ${when}`,
+    altText: `${title} ${when}`,
     contents: {
       type: "bubble",
       body: {
@@ -18,7 +19,7 @@ export function bookingRequestCard(
         layout: "vertical",
         spacing: "md",
         contents: [
-          { type: "text", text: "🗓️ คำขอนัดใหม่", weight: "bold", size: "lg" },
+          { type: "text", text: title, weight: "bold", size: "lg" },
           { type: "text", text: summary, wrap: true },
           { type: "text", text: when, wrap: true },
           {

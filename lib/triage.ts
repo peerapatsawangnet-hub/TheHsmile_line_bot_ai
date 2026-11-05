@@ -29,6 +29,7 @@ export type Decision =
   | { kind: "reply"; text: string }
   | { kind: "booking"; slots: Classification["slots"] }
   | { kind: "handoff"; reason: string }
+  | { kind: "reschedule" }
   | { kind: "appointment" }
   | { kind: "doctor"; dateText?: string }
   | { kind: "thanks" }
@@ -52,6 +53,7 @@ export function decide(result: Classification, faqAvailable: boolean): Decision 
         ? { kind: "notify", reason: "จองให้หลายคน" }
         : { kind: "booking", slots: result.slots };
     case "reschedule":
+      return { kind: "reschedule" };
     case "cancel":
       return { kind: "handoff", reason: ADMIN_LABELS[intent] };
     case "appointment_query":

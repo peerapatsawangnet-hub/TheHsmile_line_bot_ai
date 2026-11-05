@@ -204,6 +204,11 @@ function logBookingError(err: unknown): void {
   }));
 }
 
+// ค่าที่ทุกปุ่มหลังเลือกสิทธิต้องส่งต่อ x คือนัดเดิมเมื่อกำลังเลื่อนนัด
+function flowParams(service: Service, right: string, visit: string, replaces: string): Record<string, string> {
+  return { s: service.name, r: right, v: visit, ...(replaces ? { x: replaces } : {}) };
+}
+
 function withPrefix(prefix: string, message: Message): Message {
   return { ...message, text: `${prefix}\n${(message as messagingApi.TextMessage).text}` } as Message;
 }
@@ -360,7 +365,14 @@ async function continueAfterVisit(
 }
 
 // วันว่างมีมากกว่าปุ่ม quick reply จึงแบ่งหน้า from คือวันแรกของหน้านี้
-async function askDate(service: Service, right: string, visit: string, now: number, from = ""): Promise<Message> {
+async function askDate(
+  service: Service,
+  right: string,
+  visit: string,
+  now: number,
+  from = "",
+  replaces = "",
+): Promise<Message> {
   const hours = await getBookingHours();
   const lastDate = dateAt(now, BOOKING_DAYS_AHEAD);
   const [events, allowed] = await Promise.all([
@@ -377,7 +389,7 @@ async function askDate(service: Service, right: string, visit: string, now: numb
     const noon = `${date}T12:00:00${OFFSET}`;
     items.push({
       label: shortDate(noon),
-      data: postbackData({ a: "date", s: service.name, r: right, v: visit, d: date }),
+      data: postbackData({ a: "date", ...flowParams(service, right, visit, replaces), d: date }),
       displayText: formatDate(noon),
     });
   }
@@ -393,7 +405,7 @@ async function askDate(service: Service, right: string, visit: string, now: numb
     const next = new URLSearchParams(items[page.length].data).get("d") ?? "";
     page.push({
       label: "วันถัดไป ›",
-      data: postbackData({ a: "dates", s: service.name, r: right, v: visit, f: next }),
+      data: postbackData({ a: "dates", ...flowParams(service, right, visit, replaces), f: next }),
       displayText: "ดูวันถัดไป",
     });
     return quickReply("ต้องการนัดวันไหนคะ", page);
@@ -412,17 +424,24 @@ async function slotsForDate(service: Service, date: string, now: number): Promis
   return freeSlots(date, ranges, service.minutes, events, now);
 }
 
-async function askPeriod(service: Service, right: string, visit: string, date: string, now: number): Promise<Message> {
+async function askPeriod(
+  service: Service,
+  right: string,
+  visit: string,
+  date: string,
+  now: number,
+  replaces = "",
+): Promise<Message> {
   const slots = await slotsForDate(service, date, now);
   if (slots.length === 0) {
-    return withPrefix("วันนี้คิวเต็มแล้วค่ะ", await askDate(service, right, visit, now));
+    return withPrefix("วันนี้คิวเต็มแล้วค่ะ", await askDate(service, right, visit, now, "", replaces));
   }
 
   const items = Object.entries(PERIODS)
     .filter(([, { from, to }]) => slots.some((start) => start >= from && start < to))
     .map(([code, { label }]) => ({
       label,
-      data: postbackData({ a: "period", s: service.name, r: right, v: visit, d: date, p: code }),
+      data: postbackData({ a: "period", ...flowParams(service, right, visit, replaces), d: date, p: code }),
       displayText: label,
     }));
   return quickReply(`${formatDate(`${date}T12:00:00${OFFSET}`)} สะดวกช่วงไหนคะ`, items);
@@ -435,18 +454,19 @@ async function askTime(
   date: string,
   period: string,
   now: number,
+  replaces = "",
 ): Promise<Message> {
   const { from, to } = PERIODS[period] ?? PERIODS.am;
   const slots = (await slotsForDate(service, date, now)).filter((start) => start >= from && start < to);
   if (slots.length === 0) {
-    return withPrefix("ช่วงนี้คิวเต็มแล้วค่ะ", await askPeriod(service, right, visit, date, now));
+    return withPrefix("ช่วงนี้คิวเต็มแล้วค่ะ", await askPeriod(service, right, visit, date, now, replaces));
   }
 
   return quickReply(
     "ต้องการเวลาไหนคะ",
     slots.map((start) => ({
       label: clock(start),
-      data: postbackData({ a: "slot", s: service.name, r: right, v: visit, d: date, p: period, t: String(start) }),
+      data: postbackData({ a: "slot", ...flowParams(service, right, visit, replaces), d: date, p: period, t: String(start) }),
       displayText: `${clock(start)} น.`,
     })),
   );
@@ -603,6 +623,110 @@ export async function startBooking(userId: string | undefined, text: string, slo
   }
 }
 
+function pendingRescheduleMessage(event: CalendarEvent): Message {
+  return {
+    type: "text",
+    text: `คุณลูกค้ามีคำขอเลื่อนนัดเป็น${formatWhen(event.start?.dateTime ?? "")} รอแอดมินยืนยันอยู่ค่ะ หากต้องการเปลี่ยนแปลง โทร ${CLINIC_PHONE} ได้เลยนะคะ`,
+  };
+}
+
+// นัดที่ลูกค้าจองผ่าน LINE และยังไม่ถึงเวลา ไม่รวมคิวที่กันไว้ระหว่างกรอกชื่อ
+async function upcomingBookings(userId: string, now: number): Promise<CalendarEvent[]> {
+  return (await findUserEvents("lineUserId", userId, now))
+    .filter((event) =>
+      !event.extendedProperties?.private?.awaitingDetailsFor && Date.parse(event.start?.dateTime ?? "") > now)
+    .sort((a, b) => Date.parse(a.start?.dateTime ?? "") - Date.parse(b.start?.dateTime ?? ""));
+}
+
+// ลูกค้าเลือกวันเวลาใหม่เอง ใช้บริการ สิทธิ และชื่อจากนัดเดิม นัดเดิมอยู่จนกว่าแอดมินยืนยันนัดใหม่
+// คืน null เมื่อไม่พบนัดที่จองผ่าน LINE หรือระบบขัดข้อง ให้ผู้เรียกส่งต่อแอดมินแบบเดิม
+export async function startReschedule(userId: string | undefined): Promise<Message | null> {
+  if (!userId) return null;
+  try {
+    const now = Date.now();
+    const bookings = await upcomingBookings(userId, now);
+    const pending = bookings.find((event) => event.extendedProperties?.private?.replaces);
+    if (pending) return pendingRescheduleMessage(pending);
+
+    const [original] = bookings;
+    const props = original?.extendedProperties?.private ?? {};
+    const service = (await getServices()).find(({ name }) => name === props.service);
+    if (!original || !service || !RIGHTS[props.right ?? ""] || !VISITS[props.visit ?? ""]) return null;
+
+    return withPrefix(
+      `นัดเดิมของคุณคือ${formatWhen(original.start?.dateTime ?? "")} ค่ะ เลือกวันใหม่ได้เลยนะคะ หากต้องการให้แอดมินช่วย พิมพ์ "ขอแอดมิน" ได้เลยค่ะ`,
+      await askDate(service, props.right ?? "", props.visit ?? "", now, "", original.id),
+    );
+  } catch (err) {
+    logBookingError(err);
+    return null;
+  }
+}
+
+async function requestReschedule(
+  service: Service,
+  right: string,
+  visit: string,
+  date: string,
+  period: string,
+  start: number,
+  userId: string,
+  now: number,
+  replaces: string,
+): Promise<Message> {
+  const original = await getEvent(replaces);
+  const originalStart = original?.start?.dateTime ?? "";
+  if (
+    !original ||
+    original.status === "cancelled" ||
+    original.extendedProperties?.private?.lineUserId !== userId ||
+    Date.parse(originalStart) <= now
+  ) {
+    return { type: "text", text: `ไม่พบนัดเดิมค่ะ กรุณาโทร ${CLINIC_PHONE} นะคะ 🙏` };
+  }
+  const pending = (await upcomingBookings(userId, now)).find((event) => event.extendedProperties?.private?.replaces);
+  if (pending) return pendingRescheduleMessage(pending);
+
+  const slots = await slotsForDate(service, date, now);
+  if (!slots.includes(start)) {
+    return withPrefix("เวลานี้คิวเต็มแล้วค่ะ", await askTime(service, right, visit, date, period, now, replaces));
+  }
+
+  const startIso = toIso(date, start);
+  const startMs = Date.parse(startIso);
+  // ชื่อ เบอร์ และ HN มาจากนัดเดิมของลูกค้าคนนี้เอง
+  const summary = (original.summary ?? "").replace(PENDING_PREFIX, "");
+  const event = await insertEvent({
+    summary: `${PENDING_PREFIX}${summary}`,
+    status: "tentative",
+    colorId: CALENDAR_COLOR_PENDING,
+    start: { dateTime: startIso },
+    end: { dateTime: new Date(startMs + service.minutes * MINUTE_MS).toISOString() },
+    extendedProperties: {
+      private: { source: "line", lineUserId: userId, service: service.name, right, visit, replaces },
+    },
+  });
+
+  if (await lostRace(event, startMs, service.minutes, now)) {
+    await deleteEvent(event.id);
+    return withPrefix("เวลานี้คิวเต็มแล้วค่ะ", await askTime(service, right, visit, date, period, now, replaces));
+  }
+
+  const when = formatWhen(startIso);
+  const change = `จาก: ${formatWhen(originalStart)}\nเป็น: ${when}`;
+  await sendToAdmin({
+    text: `🔁 ขอเลื่อนนัด\n${summary}\n${change}\n\n${BOOKING_CARD_NOTE}`,
+    buttons: [{ label: "ยืนยัน", data: `a=ok&e=${event.id}` }, { label: "ปฏิเสธ", data: `a=no&e=${event.id}` }],
+    line: [bookingRequestCard(summary, change, event.id, "🔁 ขอเลื่อนนัด")],
+  }, "booking_notify_failed");
+
+  console.log(JSON.stringify({ tag: "reschedule_requested" }));
+  return {
+    type: "text",
+    text: `ส่งคำขอเลื่อนนัดเป็น${when} แล้วค่ะ นัดเดิม${formatWhen(originalStart)} ยังอยู่จนกว่าแอดมินจะยืนยันนะคะ 🙏`,
+  };
+}
+
 export async function handleBookingPostback(data: string, userId: string | undefined): Promise<Message | null> {
   const params = new URLSearchParams(data);
   const action = params.get("a");
@@ -624,14 +748,17 @@ export async function handleBookingPostback(data: string, userId: string | undef
     const visit = params.get("v") ?? "";
     if (!VISITS[visit]) return askVisit(service, right, prefill);
     if (action === "visit") return await continueAfterVisit(service, right, visit, prefill, userId, now);
-    if (action === "dates") return await askDate(service, right, visit, now, params.get("f") ?? "");
+    const replaces = params.get("x") ?? "";
+    if (action === "dates") return await askDate(service, right, visit, now, params.get("f") ?? "", replaces);
 
     const date = params.get("d") ?? "";
-    if (action === "date") return await askPeriod(service, right, visit, date, now);
+    if (action === "date") return await askPeriod(service, right, visit, date, now, replaces);
 
     const period = params.get("p") ?? "";
-    if (action === "period") return await askTime(service, right, visit, date, period, now);
-    return await holdSlot(service, right, visit, date, period, Number(params.get("t")), userId, now);
+    if (action === "period") return await askTime(service, right, visit, date, period, now, replaces);
+    const start = Number(params.get("t"));
+    if (replaces) return await requestReschedule(service, right, visit, date, period, start, userId, now, replaces);
+    return await holdSlot(service, right, visit, date, period, start, userId, now);
   } catch (err) {
     return failSilently(err, userId, "(กดปุ่มในขั้นตอนจองคิว)");
   }
@@ -768,6 +895,46 @@ async function handleAttendance(id: string, userId: string | undefined): Promise
   }
 }
 
+// ยืนยัน: นัดใหม่เป็นสีฟ้าแล้วลบนัดเดิม ปฏิเสธ: ลบนัดใหม่ นัดเดิมยังอยู่
+async function decideReschedule(
+  action: string | null,
+  event: CalendarEvent,
+  replaces: string,
+  summary: string,
+  when: string,
+  failNote: string,
+): Promise<Message> {
+  const userId = event.extendedProperties?.private?.lineUserId;
+  const start = event.start?.dateTime ?? "";
+  const original = await getEvent(replaces);
+  const originalLive = original && original.status !== "cancelled";
+
+  if (action === "ok") {
+    await patchEvent(event.id, {
+      status: "confirmed",
+      colorId: CALENDAR_COLOR_UNCONFIRMED,
+      summary,
+      extendedProperties: { private: { replaces: null } },
+    });
+    if (originalLive) await deleteEvent(replaces);
+    const sent = appointmentDate(start) <= dateAt(Date.now(), 1)
+      ? await sendReminder(event)
+      : await notifyCustomer(
+          userId,
+          `แอดมินยืนยันการเลื่อนนัดแล้วค่ะ นัดใหม่คือ${when} ก่อนวันนัดจะมีข้อความให้กดยืนยันอีกครั้งนะคะ 😊`,
+        );
+    return { type: "text", text: `✅ ยืนยันเลื่อนนัดแล้ว: ${summary}\nนัดใหม่ ${when} (ลบนัดเดิมแล้ว)${sent ? "" : failNote}` };
+  }
+
+  await deleteEvent(event.id);
+  const keep = originalLive ? ` นัดเดิม${formatWhen(original.start?.dateTime ?? "")} ยังอยู่นะคะ` : "";
+  const sent = await notifyCustomer(
+    userId,
+    `ขออภัยค่ะ เวลา${when} ไม่สะดวก${keep} หากต้องการเลื่อนเป็นเวลาอื่น พิมพ์ "เลื่อนนัด" หรือโทร ${CLINIC_PHONE} ได้เลยนะคะ 🙏`,
+  );
+  return { type: "text", text: `❌ ปฏิเสธการเลื่อนนัด: ${summary}\n${when} (นัดเดิมยังอยู่)${sent ? "" : failNote}` };
+}
+
 export async function handleAdminPostback(data: string): Promise<Message> {
   const params = new URLSearchParams(data);
   const action = params.get("a");
@@ -787,6 +954,9 @@ export async function handleAdminPostback(data: string): Promise<Message> {
     const start = event.start?.dateTime ?? "";
     const when = formatWhen(start);
     const failNote = "\nแจ้งลูกค้าทาง LINE ไม่สำเร็จ กรุณาติดต่อลูกค้าเอง";
+
+    const replaces = event.extendedProperties?.private?.replaces;
+    if (replaces) return await decideReschedule(action, { ...event, id }, replaces, summary, when, failNote);
 
     if (action === "ok") {
       await patchEvent(id, { status: "confirmed", colorId: CALENDAR_COLOR_UNCONFIRMED, summary });
