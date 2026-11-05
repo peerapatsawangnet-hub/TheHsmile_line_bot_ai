@@ -31,6 +31,13 @@ test("parsePatients reads by header name and skips rows without DN or phone", ()
   assert.throws(() => parsePatients([["No", "Name"]]), /patients_header_missing/);
 });
 
+test("parsePatients finds the header under a title row and tolerates spelling", () => {
+  const titled = [["คนไข้จัดฟัน 2025"], [], ["No", "DN ", "name", "Phone No"], ["1", "670009", "ทดสอบ หัวตาราง", "0811111111"]];
+  assert.deepEqual(parsePatients(titled).map((p) => p.dn), ["670009"]);
+  const thai = [["HN", "ชื่อ", "เบอร์โทร"], ["670010", "ทดสอบ ไทย", "0822222222"]];
+  assert.deepEqual(parsePatients(thai).map((p) => p.dn), ["670010"]);
+});
+
 test("matchDn needs both phone and first name", () => {
   const patients = parsePatients(rows);
   assert.equal(matchDn(patients, "สมชาย ใจดี", "0812345678"), "670001");

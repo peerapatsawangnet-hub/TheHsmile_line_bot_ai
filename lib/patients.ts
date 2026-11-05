@@ -34,13 +34,30 @@ export function firstName(name: string): string {
     ?.toLowerCase() ?? "";
 }
 
+// หัวคอลัมน์ที่รับได้ เทียบหลังตัดช่องว่างและจุด เช่น "Phone NO." "Phone No" "phone"
+const HEADERS = {
+  dn: ["dn", "hn"],
+  name: ["name", "ชื่อ", "ชื่อนามสกุล", "ชื่อสกุล"],
+  phone: ["phoneno", "phone", "tel", "เบอร์", "เบอร์โทร", "เบอร์โทรศัพท์"],
+};
+const MAX_HEADER_ROW = 5;
+
+const headerKey = (cell: string) => cell.toLowerCase().replace(/[\s.\-_:]/g, "");
+
 export function parsePatients(rows: string[][]): Patient[] {
-  const [header = [], ...body] = rows;
-  const col = (name: string) => header.findIndex((cell) => cell.trim().toLowerCase() === name);
-  const dn = col("dn");
-  const name = col("name");
-  const phone = col("phone no.");
-  if (dn < 0 || name < 0 || phone < 0) throw new Error("patients_header_missing");
+  // บางไฟล์มีชื่อตารางอยู่เหนือหัวคอลัมน์ จึงหาหัวคอลัมน์ในไม่กี่แถวแรก
+  for (let index = 0; index < Math.min(rows.length, MAX_HEADER_ROW); index++) {
+    const keys = rows[index].map(headerKey);
+    const col = (names: string[]) => keys.findIndex((key) => names.includes(key));
+    const dn = col(HEADERS.dn);
+    const name = col(HEADERS.name);
+    const phone = col(HEADERS.phone);
+    if (dn >= 0 && name >= 0 && phone >= 0) return toPatients(rows.slice(index + 1), dn, name, phone);
+  }
+  throw new Error("patients_header_missing");
+}
+
+function toPatients(body: string[][], dn: number, name: number, phone: number): Patient[] {
   return body
     .map((row) => ({ dn: (row[dn] ?? "").trim(), name: (row[name] ?? "").trim(), phones: phonesIn(row[phone] ?? "") }))
     .filter((patient) => patient.dn && patient.phones.length > 0);
