@@ -25,6 +25,7 @@ import { BOOKING_CARD_NOTE, bookingRequestCard, reminderCard } from "./flex-card
 import type { Slots } from "./gemini";
 import { notifyAdmin } from "./handoff";
 import { getLineClient } from "./line";
+import { findDn } from "./patients";
 import { MONTH_SHORT, parseDateText, parsePeriod, parseTimeText } from "./thai-datetime";
 
 type Message = messagingApi.Message;
@@ -550,7 +551,9 @@ async function completeBooking(event: CalendarEvent, details: { name: string; ph
   const service = props.service ?? "";
   const right = RIGHTS[props.right ?? ""]?.summary ?? "";
   const visit = VISITS[props.visit ?? ""]?.summary ?? "";
-  const summary = `${details.name} ${details.phone} ${service} ${right} ${visit} ไลน์ OA`;
+  // DN ช่วยให้หาชาร์ตได้เร็ว ขึ้นเฉพาะในปฏิทินและกลุ่มแอดมิน ไม่ส่งให้ลูกค้า
+  const dn = await findDn(details.name, details.phone);
+  const summary = `${dn ? `${dn} ` : ""}${details.name} ${details.phone} ${service} ${right} ${visit} ไลน์ OA`;
 
   await patchEvent(event.id, {
     summary: `${PENDING_PREFIX}${summary}`,
