@@ -49,12 +49,18 @@ async function fetchRawCsv(): Promise<string> {
 
 const questionKey = (text: string) => text.toLowerCase().replace(/[\s"'“”‘’?？!.,]/g, "");
 
-// คำตอบตรงตัวจาก Sheet ของแถวที่ Gemini เลือก ราคาและโปรโมชันจะไม่ถูกเขียนใหม่หรือย่อ
+// คำตอบจาก Sheet ของแถวที่คำถามตรงกัน ช่อง question มีได้หลายแบบคั่นด้วย /
+// เทียบได้ทั้งช่องทั้งหมด (Gemini คัดลอกมาทั้งช่อง) หรือแบบใดแบบหนึ่ง (ลูกค้าพิมพ์หรือกดปุ่ม)
 export function findFaqAnswer(faqCsv: string, question: string | undefined): string | null {
   if (!question) return null;
   const { data } = Papa.parse<FaqRow>(faqCsv, { header: true, skipEmptyLines: true });
   const wanted = questionKey(question);
-  return data.find((row) => questionKey(row.question ?? "") === wanted)?.answer?.trim() || null;
+  if (!wanted) return null;
+  const matches = (row: FaqRow) => {
+    const cell = row.question ?? "";
+    return questionKey(cell) === wanted || cell.split("/").some((variant) => questionKey(variant) === wanted);
+  };
+  return data.find(matches)?.answer?.trim() || null;
 }
 
 export async function getFaqCsv(): Promise<string> {

@@ -78,8 +78,8 @@ export async function run(c) {
   r = await text("ขอบคุณค่ะ", "Uthx");
   check("thanks -> fixed reply", r.msg?.text === THANKS, r.msg?.text);
 
-  plan.set("เปิดกี่โมง", cls("faq", { found_in_faq: true, reply: "**เปิด** 10:00-19:00 น. ค่ะ" }));
-  r = await text("เปิดกี่โมง", "Ufaq");
+  plan.set("เปิดกี่โมงคะ", cls("faq", { found_in_faq: true, reply: "**เปิด** 10:00-19:00 น. ค่ะ" }));
+  r = await text("เปิดกี่โมงคะ", "Ufaq");
   check("faq -> answer, markdown stripped", r.msg?.text === "เปิด 10:00-19:00 น. ค่ะ", r.msg?.text);
   const body = c.lastGeminiBody();
 
@@ -89,9 +89,16 @@ export async function run(c) {
   check("faq -> sheet answer verbatim", r.msg?.text === "จัดฟันเริ่มต้น 1,111 บาทค่ะ\nหากสนใจรายละเอียด พิมพ์คำว่า “ขอรายละเอียดการจัดฟัน” ได้เลยค่ะ", r.msg?.text);
   const detailBtn = r.msg?.quickReply?.items?.[0]?.action;
   check("faq -> button from พิมพ์คำว่า", detailBtn?.type === "message" && detailBtn.text === "ขอรายละเอียดการจัดฟัน" && detailBtn.label.length <= 20, JSON.stringify(detailBtn));
-  plan.set("ขอรายละเอียดการจัดฟัน", cls("faq", { found_in_faq: true, faq_question: "ขอรายละเอียดการจัดฟัน", reply: "มีหลายโปรค่ะ" }));
+  // seen live: Gemini picked the price row for the button text; an exact question match must win
+  plan.set("ขอรายละเอียดการจัดฟัน", cls("faq", { found_in_faq: true, faq_question: "จัดฟันราคาเท่าไหร่", reply: "มีหลายโปรค่ะ" }));
+  g = c.geminiCalls();
   r = await text(detailBtn?.text ?? "", "Ufaq");
   check("tap button -> full multi-line details", r.msg?.text === "🦷 โปร A\n* เดือน 1: 1,111\n* เดือน 2–11: 222" && !r.msg.quickReply, r.msg?.text);
+  check("exact FAQ question skips Gemini", c.geminiCalls() === g, String(c.geminiCalls() - g));
+  // a row the owner has not filled in yet must never reach the customer
+  plan.set("สงกรานต์เปิดไหมคะ", cls("faq", { found_in_faq: true, faq_question: "สงกรานต์เปิดไหม / ปีใหม่เปิดไหม", reply: "[นโยบายวันหยุดนักขัตฤกษ์] ค่ะ" }));
+  r = await text("สงกรานต์เปิดไหมคะ", "Ufaq");
+  check("unfilled [placeholder] FAQ -> silent + admin", r.msg === null && lastAdmin()?.text?.includes("เรื่อง: คำถามที่ FAQ ยังไม่ได้เติมคำตอบ"), lastAdmin()?.text);
   plan.set("how much are braces", cls("faq", { found_in_faq: true, faq_question: "จัดฟันราคาเท่าไหร่", reply: "Braces start at 1,111 baht." }));
   r = await text("how much are braces", "Ufaq");
   check("english question -> Gemini's English reply", r.msg?.text === "Braces start at 1,111 baht.", r.msg?.text);

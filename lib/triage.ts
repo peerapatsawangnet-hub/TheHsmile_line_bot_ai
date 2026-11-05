@@ -1,3 +1,4 @@
+import type { messagingApi } from "@line/bot-sdk";
 import type { Classification } from "./gemini";
 import { ADMIN_LABELS } from "./intents";
 
@@ -26,7 +27,7 @@ export function fallbackIntent(text: string): "emergency" | "booking" | "unknown
 }
 
 export type Decision =
-  | { kind: "reply"; text: string }
+  | { kind: "reply"; text: string; buttons?: messagingApi.QuickReply }
   | { kind: "booking"; slots: Classification["slots"] }
   | { kind: "handoff"; reason: string }
   | { kind: "reschedule" }

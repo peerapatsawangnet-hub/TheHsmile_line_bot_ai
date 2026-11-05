@@ -14,7 +14,7 @@ import {
   startReschedule,
 } from "@/lib/booking";
 import { getDoctorScheduleImage } from "@/lib/booking-config";
-import { faqButtons, faqReplyText } from "@/lib/faq-reply";
+import { exactFaqReply, faqReply } from "@/lib/faq-reply";
 import { LOOKUP_TIMEOUT_MS, THANKS_REPLY } from "@/lib/config";
 import { handoffCard } from "@/lib/flex-cards";
 import { Classification, classifyMessage } from "@/lib/gemini";
@@ -170,7 +170,7 @@ async function act(decision: Decision, userId: string, replyToken: string, messa
   const now = Date.now();
   switch (decision.kind) {
     case "reply":
-      return sendReply(replyToken, { ...text(decision.text), quickReply: faqButtons(decision.text) });
+      return sendReply(replyToken, { ...text(decision.text), quickReply: decision.buttons });
     case "thanks":
       return sendReply(replyToken, text(THANKS_REPLY));
     case "silent":
@@ -246,18 +246,25 @@ async function handleText(userId: string, replyToken: string, message: string): 
 
   if (isAck(message)) return;
 
-  const { result, faqAvailable } = await classify(message, faqPromise);
-  let decision = result ? decide(result, faqAvailable) : fallbackDecision(message);
-  if (result && decision.kind === "reply") {
-    decision = { kind: "reply", text: faqReplyText(await faqPromise, result, message) };
+  // ข้อความตรงกับคำถามใน FAQ ทุกตัวอักษร (มักมาจากปุ่ม) ตอบแถวนั้นเลย ไม่ให้ Gemini เลือกแถวอื่น
+  const exact = exactFaqReply(await faqPromise, message);
+  const { result, faqAvailable } = exact
+    ? { result: null, faqAvailable: true }
+    : await classify(message, faqPromise);
+  let decision: Decision = result ? decide(result, faqAvailable) : fallbackDecision(message);
+  const faq = exact ?? (result && decision.kind === "reply" ? faqReply(await faqPromise, result, message) : null);
+  if (faq) {
+    decision = faq.kind === "reply"
+      ? { kind: "reply", text: faq.text, buttons: faq.buttons }
+      : { kind: "notify", reason: "คำถามที่ FAQ ยังไม่ได้เติมคำตอบ" };
   }
-  console.log(JSON.stringify({ tag: "decision", kind: decision.kind, fallback: !result }));
+  console.log(JSON.stringify({ tag: "decision", kind: decision.kind, fallback: !result && !exact, exactFaq: Boolean(exact) }));
 
   // โหมดทดลอง: ไม่ตอบลูกค้า ส่งสิ่งที่บอทจะทำเข้ากลุ่มแอดมิน แต่เคสฉุกเฉินยังแจ้งจริง
   if (settings.mode === "shadow") {
     if (decision.kind === "emergency") await notifyEmergency(userId, message);
     const preview = await previewForShadow(decision, message);
-    await notifyShadow(userId, result?.intent ?? "fallback", preview.text, preview.image);
+    await notifyShadow(userId, exact ? "faq" : result?.intent ?? "fallback", preview.text, preview.image);
     return;
   }
   await act(decision, userId, replyToken, message);
