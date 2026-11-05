@@ -55,6 +55,13 @@ async function sendReply(replyToken: string, messages: Message | Message[]): Pro
 
 const text = (value: string): Message => ({ type: "text", text: value });
 
+const DOCTOR_NEXT_STEPS: messagingApi.QuickReply = {
+  items: ["จองคิว", "คุยกับแอดมิน"].map((label) => ({
+    type: "action",
+    action: { type: "message", label, text: label },
+  })),
+};
+
 // คืน null ถ้าเกินเวลา เพื่อไม่ให้รวมแล้วเกินงบเวลาของข้อความ
 async function withinLookupBudget<T>(work: Promise<T>): Promise<T | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -169,6 +176,8 @@ async function act(decision: Decision, userId: string, replyToken: string, messa
       if (!answer) return notifyAdmin(userId, "ถามวันที่คุณหมอเข้า (ไม่พบในปฏิทิน)", message);
       const messages: Message[] = [text(answer)];
       if (image) messages.push({ type: "image", originalContentUrl: image, previewImageUrl: image });
+      // ลูกค้ามักอยากนัดต่อ ปุ่มส่งเป็นข้อความ จึงเข้าคำสั่งตรงเดียวกับที่พิมพ์เอง
+      messages[messages.length - 1] = { ...messages[messages.length - 1], quickReply: DOCTOR_NEXT_STEPS };
       return sendReply(replyToken, messages);
     }
   }

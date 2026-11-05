@@ -62,8 +62,10 @@ export function decide(result: Classification, faqAvailable: boolean): Decision 
       return { kind: "thanks" };
     case "ack":
     case "greeting":
-    case "slot_reply":
       return { kind: "silent" };
+    // บอทไม่รู้ว่าใครถามวันเวลา อาจเป็นคำตอบต่อคำตอบของบอทเอง จึงต้องแจ้งแอดมิน
+    case "slot_reply":
+      return { kind: "notify", reason: ADMIN_LABELS.slot_reply };
     default:
       return { kind: "notify", reason: ADMIN_LABELS[intent] };
   }

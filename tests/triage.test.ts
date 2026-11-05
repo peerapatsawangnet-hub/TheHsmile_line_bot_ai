@@ -56,8 +56,8 @@ test("decide: booking", () => {
 });
 
 test("decide: silent and admin intents", () => {
-  for (const intent of ["ack", "greeting", "slot_reply"] as const) assert.equal(with_({ intent }).kind, "silent");
-  for (const intent of ["symptom", "request", "late", "confused", "other"] as const) assert.equal(with_({ intent }).kind, "notify");
+  for (const intent of ["ack", "greeting"] as const) assert.equal(with_({ intent }).kind, "silent");
+  for (const intent of ["slot_reply", "symptom", "request", "late", "confused", "other"] as const) assert.equal(with_({ intent }).kind, "notify");
   assert.equal(with_({ intent: "reschedule" }).kind, "handoff");
   assert.equal(with_({ intent: "cancel" }).kind, "handoff");
   assert.equal(with_({ intent: "thanks" }).kind, "thanks");
