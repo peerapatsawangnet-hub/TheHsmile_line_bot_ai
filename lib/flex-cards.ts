@@ -1,6 +1,8 @@
 import { messagingApi } from "@line/bot-sdk";
 import { CLINIC_PHONE, CLINIC_PHONE_URI, HANDOFF_REPLY } from "./config";
 
+export const BOOKING_CARD_NOTE = "เติม HN หรือแก้เวลาใน Google Calendar ก่อนกดยืนยันได้ ลูกค้าจะได้รับเวลาล่าสุด";
+
 export function bookingRequestCard(
   summary: string,
   when: string,
@@ -21,7 +23,7 @@ export function bookingRequestCard(
           { type: "text", text: when, wrap: true },
           {
             type: "text",
-            text: "เติม HN หรือแก้เวลาใน Google Calendar ก่อนกดยืนยันได้ ลูกค้าจะได้รับเวลาล่าสุด",
+            text: BOOKING_CARD_NOTE,
             wrap: true,
             size: "xs",
             color: "#666666",

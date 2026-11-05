@@ -12,6 +12,7 @@ export const SHEET_TIMEOUT_MS = 3_000;
 export const GEMINI_TIMEOUT_MS = 7_000;
 
 export const CALENDAR_TIMEOUT_MS = 5_000;
+export const TELEGRAM_TIMEOUT_MS = 5_000;
 export const BOOKING_DAYS_AHEAD = 14;
 export const BOOKING_MIN_LEAD_MINUTES = 60;
 export const BOOKING_SLOT_MINUTES = 15;

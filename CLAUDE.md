@@ -16,6 +16,8 @@ LINE Official Account bot ของคลินิกทันตกรรม Th
 - `lib/triage.ts`: regex กรอง `ack`, fallback เมื่อ Gemini ใช้ไม่ได้, แปลงผล classifier เป็นการกระทำ
 - `lib/thai-datetime.ts`: แปลงวันเวลาภาษาไทย (พ.ศ., เดือนย่อ, บ่าย3) ห้ามให้ Gemini คำนวณวันที่
 - `lib/handoff.ts`: คำสั่งตรง (`ขอแอดมิน`, `เปลี่ยนนัด` ฯลฯ) และการแจ้งกลุ่มแอดมิน รวมแจ้งด่วน 🔴 และโหมดทดลอง
+- `lib/admin-channel.ts`: ส่งเข้ากลุ่มแอดมินทาง Telegram หรือกลุ่ม LINE ทุกการแจ้งแอดมินต้องผ่าน `sendToAdmin`
+- `app/api/telegram-webhook/route.ts`: รับการกดปุ่มยืนยัน/ปฏิเสธนัดจาก Telegram ตรวจ secret token และ chat id
 - `lib/settings.ts`: แท็บ `settings` ใน Sheet
 - `lib/daily-summary.ts`: สรุปรายวันและโควต้าข้อความ ส่งหลังเตือนนัดใน cron เดิม
 - `lib/config.ts`: ค่าคงที่และข้อความมาตรฐาน
@@ -27,11 +29,13 @@ LINE Official Account bot ของคลินิกทันตกรรม Th
 
 ## Env vars
 
-`LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`, `GEMINI_API_KEY`, `SHEET_CSV_URL`, `ADMIN_GROUP_ID` (required: ไม่ตั้งจะ log `admin_group_missing`), `SETTINGS_CSV_URL` (ไม่ตั้งถือว่า `bot_enabled = TRUE`, `bot_mode = live` ถ้าตั้งไว้แต่ยังไม่เคยอ่านได้ ถือว่า `shadow` อ่านได้แล้วครั้งหนึ่งใช้ค่าล่าสุด), `DOCTOR_SCHEDULE_CSV_URL` (optional)
+`LINE_CHANNEL_ACCESS_TOKEN`, `LINE_CHANNEL_SECRET`, `GEMINI_API_KEY`, `SHEET_CSV_URL`, `ADMIN_GROUP_ID` (ต้องมีอย่างน้อยหนึ่งช่องทางแอดมิน: ไม่ตั้งทั้งสองแบบจะ log `admin_group_missing`), `SETTINGS_CSV_URL` (ไม่ตั้งถือว่า `bot_enabled = TRUE`, `bot_mode = live` ถ้าตั้งไว้แต่ยังไม่เคยอ่านได้ ถือว่า `shadow` อ่านได้แล้วครั้งหนึ่งใช้ค่าล่าสุด), `DOCTOR_SCHEDULE_CSV_URL` (optional)
 
 Gemini: ตั้ง `VERTEX_PROJECT_ID` (และ `VERTEX_LOCATION` ค่าเริ่มต้น `global`) เพื่อเรียกผ่าน Vertex AI ด้วย service account เดียวกับ Calendar ซึ่งคิดเงินผ่าน billing account และใช้ credit ของ Google Cloud ได้ ไม่ตั้งจะใช้ `GEMINI_API_KEY` ผ่าน AI Studio ซึ่งต้องเติมเงินล่วงหน้า service account ต้องมี role Vertex AI User ในโปรเจกต์นั้น
 
-ระบบจองคิวเปิดเมื่อมีครบ: `ADMIN_GROUP_ID`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY`, `GOOGLE_CALENDAR_ID`, `SERVICES_CSV_URL`, `HOURS_CSV_URL`
+กลุ่มแอดมินทาง Telegram: ตั้ง `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (เลขติดลบของกลุ่ม) และ `TELEGRAM_WEBHOOK_SECRET` แล้วการแจ้งแอดมินทุกอย่างจะไปที่ Telegram แทนกลุ่ม LINE ไม่กินโควต้า push ของ LINE ต้อง `setWebhook` ไปที่ `/api/telegram-webhook` พร้อม `secret_token` เดียวกัน ข้อความถึงลูกค้า (เตือนนัด แจ้งผลยืนยัน) ยังเป็น LINE push ที่นับโควต้า ปุ่มในการ์ดกลุ่ม LINE เดิมยังกดได้ถ้ายังตั้ง `ADMIN_GROUP_ID` ไว้
+
+ระบบจองคิวเปิดเมื่อมีครบ: `ADMIN_GROUP_ID` หรือ Telegram, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY`, `GOOGLE_CALENDAR_ID`, `SERVICES_CSV_URL`, `HOURS_CSV_URL`
 
 - แท็บบริการ: `service,duration_minutes,active,needs_doctor` (`needs_doctor` ว่างถือว่า `TRUE`)
 - แท็บเวลาจอง: `day,open,close` เช่น `จันทร์,10:00,12:00` หนึ่งวันมีหลายแถวได้ วันที่ไม่มีแถวถือว่าปิด
@@ -54,7 +58,7 @@ Gemini: ตั้ง `VERTEX_PROJECT_ID` (และ `VERTEX_LOCATION` ค่า�
 - ห้ามข้าม signature verification และห้าม hardcode token
 - ห้าม retry ด้วย reply token เดิม เพราะใช้ได้ครั้งเดียว
 - ห้าม log ข้อความลูกค้า ชื่อ เบอร์ userId หรือ displayName ให้ log แค่ความยาวข้อความ intent confidence token และ error
-- ข้อความลูกค้าส่งเข้ากลุ่มแอดมินได้ (เจ้าของอนุญาต) แต่ห้ามใส่ userId
+- ข้อความลูกค้าส่งเข้ากลุ่มแอดมินได้ (เจ้าของอนุญาต ทั้งกลุ่ม LINE และ Telegram) แต่ห้ามใส่ userId
 - ห้าม parse CSV เอง ให้ใช้ papaparse
 - งบเวลาต่อข้อความคือ Sheet 3 วินาที + Gemini 7 วินาที อ่านปฏิทินเพื่อตอบคำถามไม่เกิน 3 วินาที
 - ทางที่พังต้องจบที่ "เงียบ + แจ้งกลุ่มแอดมิน" ห้ามส่งข้อความขออภัยให้ลูกค้า

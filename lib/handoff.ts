@@ -1,4 +1,4 @@
-import { HTTPFetchError, messagingApi } from "@line/bot-sdk";
+import { isTelegramAdmin, sendToAdmin } from "./admin-channel";
 import { getLineClient } from "./line";
 
 const MAX_NOTIFY_LENGTH = 500;
@@ -45,33 +45,12 @@ function clip(message: string): string {
   return message.length > MAX_NOTIFY_LENGTH ? `${message.slice(0, MAX_NOTIFY_LENGTH)}…` : message;
 }
 
-// ไม่ throw: แจ้งแอดมินไม่สำเร็จต้องไม่ทำให้งานอื่นพัง
-async function pushToAdmin(messages: messagingApi.Message[], tag: string): Promise<boolean> {
-  const groupId = process.env.ADMIN_GROUP_ID;
-  if (!groupId) {
-    console.error(JSON.stringify({ tag: "admin_group_missing" }));
-    return false;
-  }
-  try {
-    await getLineClient().pushMessage({ to: groupId, messages });
-    return true;
-  } catch (err) {
-    console.error(JSON.stringify({
-      tag,
-      status: err instanceof HTTPFetchError ? err.status : undefined,
-      body: err instanceof HTTPFetchError ? err.body : undefined,
-    }));
-    return false;
-  }
-}
-
 // ข้อความลูกค้าไปอยู่ในกลุ่มแอดมินเท่านั้น ห้ามลง log
 export async function notifyAdmin(userId: string | undefined, reason: string, message: string): Promise<void> {
   const name = await getDisplayName(userId);
-  await pushToAdmin([{
-    type: "text",
+  await sendToAdmin({
     text: `🔔 มีแชทรอแอดมินตอบ\nลูกค้า: ${name}\nเรื่อง: ${reason}\nข้อความ: ${clip(message)}\nตอบได้ที่: LINE OA Manager → แชท`,
-  }], "admin_notify_failed");
+  }, "admin_notify_failed");
 }
 
 export async function notifyEmergency(userId: string | undefined, message: string): Promise<void> {
@@ -79,13 +58,17 @@ export async function notifyEmergency(userId: string | undefined, message: strin
   const body = `🔴 ด่วน · อาการฉุกเฉิน\nลูกค้า: ${name}\nข้อความ: ${clip(message)}\nกรุณาติดต่อกลับทันที`;
   console.log(JSON.stringify({ tag: "emergency" }));
 
-  // mention ทุกคนในกลุ่ม ถ้า LINE ไม่รับ textV2 ให้ส่งข้อความปกติแทน
-  const mentioned = await pushToAdmin([{
-    type: "textV2",
-    text: `{everyone}\n${body}`,
-    substitution: { everyone: { type: "mention", mentionee: { type: "all" } } },
-  }], "emergency_mention_failed");
-  if (!mentioned) await pushToAdmin([{ type: "text", text: body }], "emergency_notify_failed");
+  // LINE: mention ทุกคนในกลุ่ม ถ้าไม่รับ textV2 ให้ส่งข้อความปกติแทน
+  // Telegram: ข้อความในกลุ่มแจ้งเตือนทุกคนอยู่แล้ว
+  const sent = await sendToAdmin({
+    text: body,
+    line: [{
+      type: "textV2",
+      text: `{everyone}\n${body}`,
+      substitution: { everyone: { type: "mention", mentionee: { type: "all" } } },
+    }],
+  }, "emergency_mention_failed");
+  if (!sent && !isTelegramAdmin()) await sendToAdmin({ text: body }, "emergency_notify_failed");
 }
 
 export async function notifyShadow(
@@ -95,8 +78,5 @@ export async function notifyShadow(
   image?: string | null,
 ): Promise<void> {
   const name = await getDisplayName(userId);
-  await pushToAdmin([
-    { type: "text", text: `🧪 [ทดลอง] ${name} · ${intent} · บอทจะตอบ: ${clip(wouldReply)}` },
-    ...(image ? [{ type: "image" as const, originalContentUrl: image, previewImageUrl: image }] : []),
-  ], "shadow_notify_failed");
+  await sendToAdmin({ text: `🧪 [ทดลอง] ${name} · ${intent} · บอทจะตอบ: ${clip(wouldReply)}`, image }, "shadow_notify_failed");
 }

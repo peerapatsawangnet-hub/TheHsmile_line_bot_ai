@@ -20,7 +20,8 @@ import {
   CALENDAR_COLOR_UNCONFIRMED,
   CLINIC_PHONE,
 } from "./config";
-import { bookingRequestCard, reminderCard } from "./flex-cards";
+import { hasAdminChannel, sendToAdmin } from "./admin-channel";
+import { BOOKING_CARD_NOTE, bookingRequestCard, reminderCard } from "./flex-cards";
 import type { Slots } from "./gemini";
 import { notifyAdmin } from "./handoff";
 import { getLineClient } from "./line";
@@ -68,7 +69,7 @@ export function isBookingEnabled(): boolean {
     process.env.GOOGLE_CALENDAR_ID &&
     process.env.SERVICES_CSV_URL &&
     process.env.HOURS_CSV_URL &&
-    process.env.ADMIN_GROUP_ID,
+    hasAdminChannel(),
   );
 }
 
@@ -525,18 +526,12 @@ async function completeBooking(event: CalendarEvent, details: { name: string; ph
   });
 
   const when = formatWhen(event.start?.dateTime ?? "");
-  try {
-    await getLineClient().pushMessage({
-      to: process.env.ADMIN_GROUP_ID ?? "",
-      messages: [bookingRequestCard(summary, when, event.id)],
-    });
-  } catch (err) {
-    // นัดอยู่ใน Calendar แล้ว ทีมยังเห็นจากปฏิทินได้
-    console.error(JSON.stringify({
-      tag: "booking_notify_failed",
-      status: (err as { status?: number }).status,
-    }));
-  }
+  // ส่งไม่สำเร็จก็ไม่เป็นไร นัดอยู่ใน Calendar แล้ว ทีมยังเห็นจากปฏิทินได้
+  await sendToAdmin({
+    text: `🗓️ คำขอนัดใหม่\n${summary}\n${when}\n\n${BOOKING_CARD_NOTE}`,
+    buttons: [{ label: "ยืนยัน", data: `a=ok&e=${event.id}` }, { label: "ปฏิเสธ", data: `a=no&e=${event.id}` }],
+    line: [bookingRequestCard(summary, when, event.id)],
+  }, "booking_notify_failed");
 
   console.log(JSON.stringify({ tag: "booking_created" }));
   return {

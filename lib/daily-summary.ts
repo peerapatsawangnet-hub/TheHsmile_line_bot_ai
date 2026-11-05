@@ -1,3 +1,4 @@
+import { isTelegramAdmin, sendToAdmin } from "./admin-channel";
 import { dateAt, endOfDay, formatDate, toIso } from "./booking";
 import { CalendarEvent, listEvents } from "./calendar";
 import { CALENDAR_COLOR_PENDING, QUOTA_WARN_RATIO } from "./config";
@@ -14,8 +15,9 @@ async function quotaLine(): Promise<string> {
 
   const ratio = used / quota.value;
   const line = `โควต้าข้อความเดือนนี้: ใช้ไป ${used}/${quota.value} (${Math.round(ratio * 100)}%)`;
+  const stops = isTelegramAdmin() ? "การเตือนนัดและแจ้งผลยืนยันนัดให้ลูกค้า" : "การแจ้งแอดมิน/เตือนนัด";
   return ratio >= QUOTA_WARN_RATIO
-    ? `${line}\n⚠️ โควต้าใกล้หมด · reply ยังส่งได้ แต่การแจ้งแอดมิน/เตือนนัดจะหยุดเมื่อหมด`
+    ? `${line}\n⚠️ โควต้าใกล้หมด · reply ยังส่งได้ แต่${stops}จะหยุดเมื่อหมด`
     : line;
 }
 
@@ -44,17 +46,14 @@ export async function sendDailySummary(now: number): Promise<void> {
     return event.status !== "cancelled" && !isHold(event) && at >= yesterdayStart && at < todayStart;
   }).length;
 
-  await getLineClient().pushMessage({
-    to: process.env.ADMIN_GROUP_ID ?? "",
-    messages: [{
-      type: "text",
-      text: [
-        `📋 สรุปประจำวัน ${formatDate(`${today}T12:00:00+07:00`)}`,
-        `นัดวันนี้: ${appointments} · รอแอดมินยืนยัน (สีเทา): ${pending}`,
-        `นัดใหม่จาก LINE เมื่อวาน: ${created}`,
-        quota,
-      ].join("\n"),
-    }],
-  });
+  const sent = await sendToAdmin({
+    text: [
+      `📋 สรุปประจำวัน ${formatDate(`${today}T12:00:00+07:00`)}`,
+      `นัดวันนี้: ${appointments} · รอแอดมินยืนยัน (สีเทา): ${pending}`,
+      `นัดใหม่จาก LINE เมื่อวาน: ${created}`,
+      quota,
+    ].join("\n"),
+  }, "daily_summary_failed");
+  if (!sent) throw new Error("daily_summary_failed");
   console.log(JSON.stringify({ tag: "daily_summary", appointments, pending, created }));
 }
