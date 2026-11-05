@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "test": "tsx --test \"tests/**/*.test.ts\"",
-    "test:intents": "tsx scripts/test-intents.ts"
+    "test:intents": "tsx scripts/test-intents.ts",
+    "test:e2e": "next build && node tests/e2e/run.mjs && node tests/e2e/run.mjs --vertex --telegram"
   },
   "dependencies": {
     "@google/genai": "^2.32.0",

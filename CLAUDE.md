@@ -25,6 +25,7 @@ LINE Official Account bot ของคลินิกทันตกรรม Th
 - `lib/flex-cards.ts`, `lib/line.ts`: Flex Message และ LINE client
 - `rich-menu.json`, `scripts/install-rich-menu.mjs`: Rich Menu 6 ช่อง
 - `tests/*.test.ts` (`npm test`), `tests/intent-holdout.json` + `scripts/test-intents.ts`: ชุดทดสอบ
+- `tests/e2e/` (`npm run test:e2e`): build แล้วรันบอทจริงกับ mock ของ LINE, Gemini/Vertex, Calendar, Sheets, Telegram สองรอบ (กลุ่ม LINE + AI Studio และ Telegram + Vertex) ต้องผ่านทั้งหมดก่อน push โค้ดที่แตะ flow จอง แจ้งแอดมิน หรือ webhook
 - `docs/test-conversations.md`: บททดสอบบนมือถือก่อนปล่อยใช้งาน
 
 ## Env vars
