@@ -59,7 +59,7 @@ test("decide: silent and admin intents", () => {
   for (const intent of ["ack", "greeting"] as const) assert.equal(with_({ intent }).kind, "silent");
   for (const intent of ["slot_reply", "symptom", "request", "late", "confused", "other"] as const) assert.equal(with_({ intent }).kind, "notify");
   assert.equal(with_({ intent: "reschedule" }).kind, "reschedule");
-  assert.equal(with_({ intent: "cancel" }).kind, "handoff");
+  assert.equal(with_({ intent: "cancel" }).kind, "cancel");
   assert.equal(with_({ intent: "thanks" }).kind, "thanks");
   assert.equal(with_({ intent: "appointment_query" }).kind, "appointment");
   assert.equal(with_({ intent: "doctor_schedule" }).kind, "doctor");

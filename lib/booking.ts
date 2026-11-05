@@ -20,8 +20,8 @@ import {
   CALENDAR_COLOR_UNCONFIRMED,
   CLINIC_PHONE,
 } from "./config";
-import { hasAdminChannel, sendToAdmin } from "./admin-channel";
-import { BOOKING_CARD_NOTE, bookingRequestCard, reminderCard } from "./flex-cards";
+import { AdminNotice, hasAdminChannel, sendToAdmin } from "./admin-channel";
+import { AdminCardAction, BOOKING_CARD_NOTE, bookingActions, bookingRequestCard, reminderCard } from "./flex-cards";
 import type { Slots } from "./gemini";
 import { notifyAdmin } from "./handoff";
 import { getLineClient } from "./line";
@@ -39,7 +39,9 @@ const MAX_NAME_LENGTH = 100;
 const PENDING_PREFIX = "[รอแอดมิน] ";
 
 const BOOKING_TRIGGERS = ["จองคิว", "จองนัด", "ขอนัด", "อยากนัด", "นัดหมอ", "นัดหมาย", "book appointment"];
-const ADMIN_ACTIONS = new Set(["ok", "no"]);
+// ok/no: ยืนยันหรือปฏิเสธนัดและคำขอเลื่อนนัด cx/ck: ยืนยันยกเลิกนัดหรือไม่ยกเลิก
+const ADMIN_ACTIONS = new Set(["ok", "no", "cx", "ck"]);
+const CANCEL_PREFIX = "[ขอยกเลิก] ";
 
 const RIGHTS: Record<string, { label: string; summary: string }> = {
   gold: { label: "สปสช (สิทธิบัตรทอง)", summary: "สปสช" },
@@ -537,6 +539,21 @@ async function holdSlot(
   };
 }
 
+// การ์ดคำขอในกลุ่มแอดมิน หน้าตาเดียวกันทั้ง Telegram และ LINE
+function requestNotice(
+  title: string,
+  summary: string,
+  when: string,
+  actions: [AdminCardAction, AdminCardAction],
+  note = BOOKING_CARD_NOTE,
+): AdminNotice {
+  return {
+    text: `${title}\n${summary}\n${when}${note ? `\n\n${note}` : ""}`,
+    buttons: actions,
+    line: [bookingRequestCard(summary, when, actions, { title, note })],
+  };
+}
+
 function parseDetails(text: string): { name: string; phone: string } | null {
   const clean = text.replace(/\s+/g, " ").trim();
   const match = clean.match(/(?<!\d)0\d(?:[ -]?\d){7,8}(?!\d)/);
@@ -562,11 +579,7 @@ async function completeBooking(event: CalendarEvent, details: { name: string; ph
 
   const when = formatWhen(event.start?.dateTime ?? "");
   // ส่งไม่สำเร็จก็ไม่เป็นไร นัดอยู่ใน Calendar แล้ว ทีมยังเห็นจากปฏิทินได้
-  await sendToAdmin({
-    text: `🗓️ คำขอนัดใหม่\n${summary}\n${when}\n\n${BOOKING_CARD_NOTE}`,
-    buttons: [{ label: "ยืนยัน", data: `a=ok&e=${event.id}` }, { label: "ปฏิเสธ", data: `a=no&e=${event.id}` }],
-    line: [bookingRequestCard(summary, when, event.id)],
-  }, "booking_notify_failed");
+  await sendToAdmin(requestNotice("🗓️ คำขอนัดใหม่", summary, when, bookingActions(event.id)), "booking_notify_failed");
 
   console.log(JSON.stringify({ tag: "booking_created" }));
   return {
@@ -652,6 +665,7 @@ export async function startReschedule(userId: string | undefined): Promise<Messa
     if (pending) return pendingRescheduleMessage(pending);
 
     const [original] = bookings;
+    if (original?.extendedProperties?.private?.cancelRequested) return pendingCancelMessage(original);
     const props = original?.extendedProperties?.private ?? {};
     const service = (await getServices()).find(({ name }) => name === props.service);
     if (!original || !service || !RIGHTS[props.right ?? ""] || !VISITS[props.visit ?? ""]) return null;
@@ -664,6 +678,91 @@ export async function startReschedule(userId: string | undefined): Promise<Messa
     logBookingError(err);
     return null;
   }
+}
+
+const cleanTitle = (summary: string | undefined) => (summary ?? "").replace(CANCEL_PREFIX, "").replace(PENDING_PREFIX, "");
+
+function pendingCancelMessage(event: CalendarEvent): Message {
+  return {
+    type: "text",
+    text: `คุณลูกค้ามีคำขอยกเลิกนัด${formatWhen(event.start?.dateTime ?? "")} รอแอดมินยืนยันอยู่ค่ะ`,
+  };
+}
+
+// ถามย้ำก่อนส่งคำขอยกเลิก กันลูกค้าพิมพ์หรือกดพลาด
+// คืน null เมื่อไม่พบนัดที่จองผ่าน LINE หรือระบบขัดข้อง ให้ผู้เรียกส่งต่อแอดมินแบบเดิม
+export async function startCancel(userId: string | undefined): Promise<Message | null> {
+  if (!userId) return null;
+  try {
+    const event = (await upcomingBookings(userId, Date.now()))
+      .find((e) => !e.extendedProperties?.private?.replaces);
+    if (!event) return null;
+    if (event.extendedProperties?.private?.cancelRequested) return pendingCancelMessage(event);
+    return quickReply(`ต้องการยกเลิกนัด${formatWhen(event.start?.dateTime ?? "")} ใช่ไหมคะ`, [
+      { label: "ยกเลิกนัด", data: postbackData({ a: "cancel", e: event.id }), displayText: "ยกเลิกนัด" },
+      { label: "ไม่ยกเลิก", data: postbackData({ a: "keep", e: event.id }), displayText: "ไม่ยกเลิก" },
+    ]);
+  } catch (err) {
+    logBookingError(err);
+    return null;
+  }
+}
+
+// นัดยังอยู่ในปฏิทินจนแอดมินยืนยัน ชื่อนัดขึ้นต้นด้วย [ขอยกเลิก] ให้เห็นจากปฏิทิน
+async function requestCancel(id: string, userId: string, keep: boolean): Promise<Message> {
+  const event = await getEvent(id);
+  const start = event?.start?.dateTime ?? "";
+  if (
+    !event ||
+    event.status === "cancelled" ||
+    event.extendedProperties?.private?.lineUserId !== userId ||
+    Date.parse(start) <= Date.now()
+  ) {
+    return { type: "text", text: `ไม่พบนัดนี้ค่ะ กรุณาโทร ${CLINIC_PHONE} นะคะ 🙏` };
+  }
+  if (event.extendedProperties?.private?.cancelRequested) return pendingCancelMessage(event);
+  if (keep) return { type: "text", text: `นัดของคุณ${formatWhen(start)} ยังอยู่ค่ะ 😊` };
+
+  const summary = cleanTitle(event.summary);
+  await patchEvent(id, {
+    summary: `${CANCEL_PREFIX}${event.summary ?? ""}`,
+    extendedProperties: { private: { cancelRequested: "1" } },
+  });
+  await sendToAdmin(
+    requestNotice("🚫 ขอยกเลิกนัด", summary, formatWhen(start), [
+      { label: "ยืนยันยกเลิก", data: `a=cx&e=${id}` },
+      { label: "ไม่ยกเลิก", data: `a=ck&e=${id}` },
+    ], ""),
+    "booking_notify_failed",
+  );
+  console.log(JSON.stringify({ tag: "cancel_requested" }));
+  return { type: "text", text: "ส่งคำขอยกเลิกนัดแล้วค่ะ แอดมินจะยืนยันให้อีกครั้งนะคะ 🙏" };
+}
+
+// ยืนยัน: ลบนัดแล้วแจ้งลูกค้า ไม่ยกเลิก: คืนชื่อนัดเดิม ไม่แจ้งลูกค้า ให้แอดมินคุยเอง
+async function decideCancel(action: string, event: CalendarEvent | null, id: string): Promise<Message> {
+  if (!event || event.status === "cancelled") return { type: "text", text: "นัดนี้ถูกลบหรือยกเลิกไปแล้วค่ะ" };
+  if (!event.extendedProperties?.private?.cancelRequested) {
+    return { type: "text", text: "คำขอยกเลิกนี้ดำเนินการไปแล้วค่ะ" };
+  }
+  const summary = cleanTitle(event.summary);
+  const when = formatWhen(event.start?.dateTime ?? "");
+
+  if (action === "cx") {
+    await deleteEvent(id);
+    const sent = await notifyCustomer(
+      event.extendedProperties?.private?.lineUserId,
+      `ยกเลิกนัด${when} เรียบร้อยแล้วค่ะ หากต้องการนัดใหม่ พิมพ์ "จองคิว" ได้เลยนะคะ`,
+    );
+    const failNote = sent ? "" : "\nแจ้งลูกค้าทาง LINE ไม่สำเร็จ กรุณาติดต่อลูกค้าเอง";
+    return { type: "text", text: `🚫 ยกเลิกนัดแล้ว: ${summary}\n${when}${failNote}` };
+  }
+
+  await patchEvent(id, {
+    summary: (event.summary ?? "").replace(CANCEL_PREFIX, ""),
+    extendedProperties: { private: { cancelRequested: null } },
+  });
+  return { type: "text", text: `↩️ ไม่ยกเลิก: ${summary}\n${when}\nนัดยังอยู่ กรุณาคุยกับลูกค้าใน LINE OA Manager` };
 }
 
 async function requestReschedule(
@@ -717,11 +816,7 @@ async function requestReschedule(
 
   const when = formatWhen(startIso);
   const change = `จาก: ${formatWhen(originalStart)}\nเป็น: ${when}`;
-  await sendToAdmin({
-    text: `🔁 ขอเลื่อนนัด\n${summary}\n${change}\n\n${BOOKING_CARD_NOTE}`,
-    buttons: [{ label: "ยืนยัน", data: `a=ok&e=${event.id}` }, { label: "ปฏิเสธ", data: `a=no&e=${event.id}` }],
-    line: [bookingRequestCard(summary, change, event.id, "🔁 ขอเลื่อนนัด")],
-  }, "booking_notify_failed");
+  await sendToAdmin(requestNotice("🔁 ขอเลื่อนนัด", summary, change, bookingActions(event.id)), "booking_notify_failed");
 
   console.log(JSON.stringify({ tag: "reschedule_requested" }));
   return {
@@ -734,6 +829,14 @@ export async function handleBookingPostback(data: string, userId: string | undef
   const params = new URLSearchParams(data);
   const action = params.get("a");
   if (action === "attend") return handleAttendance(params.get("e") ?? "", userId);
+  if (action === "cancel" || action === "keep") {
+    if (!userId) return null;
+    try {
+      return await requestCancel(params.get("e") ?? "", userId, action === "keep");
+    } catch (err) {
+      return failSilently(err, userId, "(กดปุ่มยกเลิกนัด)");
+    }
+  }
   if (!["svc", "right", "visit", "dates", "date", "period", "slot"].includes(action ?? "")) return null;
 
   try {
@@ -867,7 +970,8 @@ export async function sendDailyReminders(now: number): Promise<{ sent: number; f
       appointmentDate(start) !== tomorrow ||
       event.status !== "confirmed" ||
       event.colorId === CALENDAR_COLOR_CONFIRMED ||
-      event.extendedProperties?.private?.reminderFor === tomorrow
+      event.extendedProperties?.private?.reminderFor === tomorrow ||
+      event.extendedProperties?.private?.cancelRequested
     ) continue;
 
     if (await sendReminder(event)) sent++;
@@ -945,6 +1049,7 @@ export async function handleAdminPostback(data: string): Promise<Message> {
 
   try {
     const event = await getEvent(id);
+    if (action === "cx" || action === "ck") return await decideCancel(action, event, id);
     if (!event || event.status === "cancelled") {
       return { type: "text", text: "นัดนี้ถูกลบหรือยกเลิกไปแล้วค่ะ" };
     }

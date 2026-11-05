@@ -31,6 +31,10 @@ export function isRescheduleCommand(message: string): boolean {
   return includesAny(message, ["เปลี่ยนนัด", "เลื่อนนัด"]) && !message.includes("ยกเลิก");
 }
 
+export function isCancelCommand(message: string): boolean {
+  return message.includes("ยกเลิกนัด");
+}
+
 export function isHandoffCommand(message: string): boolean {
   return includesAny(message, HANDOFF_COMMANDS) || isAppointmentChangeCommand(message);
 }

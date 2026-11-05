@@ -10,6 +10,7 @@ import {
   isBookingEnabled,
   isBookingRequest,
   startBooking,
+  startCancel,
   startReschedule,
 } from "@/lib/booking";
 import { getDoctorScheduleImage } from "@/lib/booking-config";
@@ -18,6 +19,7 @@ import { handoffCard } from "@/lib/flex-cards";
 import { Classification, classifyMessage } from "@/lib/gemini";
 import {
   isAppointmentChangeCommand,
+  isCancelCommand,
   isHandoffCommand,
   isRescheduleCommand,
   notifyAdmin,
@@ -139,6 +141,7 @@ function describeForShadow(decision: Decision): string {
     case "booking": return "(เข้า flow จองคิว)";
     case "handoff": return `(การ์ดติดต่อกลับ + แจ้งแอดมิน: ${decision.reason})`;
     case "reschedule": return "(ให้เลือกวันเวลาใหม่ ถ้าไม่พบนัดผ่าน LINE ส่งการ์ดติดต่อกลับ + แจ้งแอดมิน)";
+    case "cancel": return "(ถามย้ำแล้วส่งคำขอยกเลิกให้แอดมินกดยืนยัน ถ้าไม่พบนัดผ่าน LINE ส่งการ์ดติดต่อกลับ + แจ้งแอดมิน)";
     case "appointment": return "(ตอบเวลานัดจากปฏิทิน)";
     case "doctor": return "(ตอบวันที่คุณหมอเข้า)";
     case "silent": return "(เงียบ)";
@@ -153,6 +156,13 @@ async function reschedule(userId: string, replyToken: string, message: string): 
   if (reply) return sendReply(replyToken, reply);
   console.log(JSON.stringify({ tag: "handoff" }));
   await Promise.all([notifyAdmin(userId, "ขอเปลี่ยนนัด", message), sendReply(replyToken, handoffCard())]);
+}
+
+async function cancel(userId: string, replyToken: string, message: string): Promise<void> {
+  const reply = isBookingEnabled() ? await startCancel(userId) : null;
+  if (reply) return sendReply(replyToken, reply);
+  console.log(JSON.stringify({ tag: "handoff" }));
+  await Promise.all([notifyAdmin(userId, "ขอยกเลิกนัด", message), sendReply(replyToken, handoffCard())]);
 }
 
 async function act(decision: Decision, userId: string, replyToken: string, message: string): Promise<void> {
@@ -173,6 +183,8 @@ async function act(decision: Decision, userId: string, replyToken: string, messa
       return;
     case "reschedule":
       return reschedule(userId, replyToken, message);
+    case "cancel":
+      return cancel(userId, replyToken, message);
     case "booking": {
       if (!isBookingEnabled()) return notifyAdmin(userId, "ขอนัด (ระบบจองปิดอยู่)", message);
       const reply = await startBooking(userId, message, decision.slots);
@@ -212,6 +224,7 @@ async function handleText(userId: string, replyToken: string, message: string): 
 
   // คำสั่งตรงทำงานแบบเดิมเสมอ
   if (isRescheduleCommand(message)) return reschedule(userId, replyToken, message);
+  if (isCancelCommand(message)) return cancel(userId, replyToken, message);
   if (isHandoffCommand(message)) {
     const reason = isAppointmentChangeCommand(message) ? "ขอเปลี่ยนหรือยกเลิกนัด" : "ขอคุยกับแอดมิน";
     console.log(JSON.stringify({ tag: "handoff" }));

@@ -3,11 +3,18 @@ import { CLINIC_PHONE, CLINIC_PHONE_URI, HANDOFF_REPLY } from "./config";
 
 export const BOOKING_CARD_NOTE = "เติม HN หรือแก้เวลาใน Google Calendar ก่อนกดยืนยันได้ ลูกค้าจะได้รับเวลาล่าสุด";
 
+export type AdminCardAction = { label: string; data: string };
+
+export function bookingActions(eventId: string): [AdminCardAction, AdminCardAction] {
+  return [{ label: "ยืนยัน", data: `a=ok&e=${eventId}` }, { label: "ปฏิเสธ", data: `a=no&e=${eventId}` }];
+}
+
+// การ์ดในกลุ่มแอดมิน: ปุ่มแรกคือทำตามคำขอ ปุ่มที่สองคือไม่ทำ
 export function bookingRequestCard(
   summary: string,
   when: string,
-  eventId: string,
-  title = "🗓️ คำขอนัดใหม่",
+  [yes, no]: [AdminCardAction, AdminCardAction],
+  { title = "🗓️ คำขอนัดใหม่", note = BOOKING_CARD_NOTE }: { title?: string; note?: string } = {},
 ): messagingApi.FlexMessage {
   return {
     type: "flex",
@@ -22,13 +29,7 @@ export function bookingRequestCard(
           { type: "text", text: title, weight: "bold", size: "lg" },
           { type: "text", text: summary, wrap: true },
           { type: "text", text: when, wrap: true },
-          {
-            type: "text",
-            text: BOOKING_CARD_NOTE,
-            wrap: true,
-            size: "xs",
-            color: "#666666",
-          },
+          ...(note ? [{ type: "text" as const, text: note, wrap: true, size: "xs", color: "#666666" }] : []),
         ],
       },
       footer: {
@@ -36,16 +37,8 @@ export function bookingRequestCard(
         layout: "horizontal",
         spacing: "sm",
         contents: [
-          {
-            type: "button",
-            style: "primary",
-            action: { type: "postback", label: "ยืนยัน", data: `a=ok&e=${eventId}` },
-          },
-          {
-            type: "button",
-            style: "secondary",
-            action: { type: "postback", label: "ปฏิเสธ", data: `a=no&e=${eventId}` },
-          },
+          { type: "button", style: "primary", action: { type: "postback", ...yes } },
+          { type: "button", style: "secondary", action: { type: "postback", ...no } },
         ],
       },
     },
