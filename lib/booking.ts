@@ -359,7 +359,8 @@ async function continueAfterVisit(
   return askPeriod(service, right, visit, date, now);
 }
 
-async function askDate(service: Service, right: string, visit: string, now: number): Promise<Message> {
+// วันว่างมีมากกว่าปุ่ม quick reply จึงแบ่งหน้า from คือวันแรกของหน้านี้
+async function askDate(service: Service, right: string, visit: string, now: number, from = ""): Promise<Message> {
   const hours = await getBookingHours();
   const lastDate = dateAt(now, BOOKING_DAYS_AHEAD);
   const [events, allowed] = await Promise.all([
@@ -370,6 +371,7 @@ async function askDate(service: Service, right: string, visit: string, now: numb
   const items = [];
   for (let i = 0; i <= BOOKING_DAYS_AHEAD; i++) {
     const date = dateAt(now, i);
+    if (date < from) continue;
     if (allowed && !allowed.has(date)) continue;
     if (freeSlots(date, rangesFor(date, hours), service.minutes, events, now).length === 0) continue;
     const noon = `${date}T12:00:00${OFFSET}`;
@@ -385,6 +387,16 @@ async function askDate(service: Service, right: string, visit: string, now: numb
       type: "text",
       text: `ขออภัยค่ะ ช่วง ${BOOKING_DAYS_AHEAD} วันนี้คิว${service.name}เต็ม กรุณาโทร ${CLINIC_PHONE} นะคะ 🙏`,
     };
+  }
+  if (items.length > MAX_QUICK_REPLIES) {
+    const page = items.slice(0, MAX_QUICK_REPLIES - 1);
+    const next = new URLSearchParams(items[page.length].data).get("d") ?? "";
+    page.push({
+      label: "วันถัดไป ›",
+      data: postbackData({ a: "dates", s: service.name, r: right, v: visit, f: next }),
+      displayText: "ดูวันถัดไป",
+    });
+    return quickReply("ต้องการนัดวันไหนคะ", page);
   }
   return quickReply("ต้องการนัดวันไหนคะ", items);
 }
@@ -595,7 +607,7 @@ export async function handleBookingPostback(data: string, userId: string | undef
   const params = new URLSearchParams(data);
   const action = params.get("a");
   if (action === "attend") return handleAttendance(params.get("e") ?? "", userId);
-  if (!["svc", "right", "visit", "date", "period", "slot"].includes(action ?? "")) return null;
+  if (!["svc", "right", "visit", "dates", "date", "period", "slot"].includes(action ?? "")) return null;
 
   try {
     if (!userId) return null;
@@ -612,6 +624,7 @@ export async function handleBookingPostback(data: string, userId: string | undef
     const visit = params.get("v") ?? "";
     if (!VISITS[visit]) return askVisit(service, right, prefill);
     if (action === "visit") return await continueAfterVisit(service, right, visit, prefill, userId, now);
+    if (action === "dates") return await askDate(service, right, visit, now, params.get("f") ?? "");
 
     const date = params.get("d") ?? "";
     if (action === "date") return await askPeriod(service, right, visit, date, now);
@@ -624,9 +637,9 @@ export async function handleBookingPostback(data: string, userId: string | undef
   }
 }
 
-// นัดที่จองผ่าน LINE ใน 30 วันข้างหน้า นัดที่แอดมินลงเองไม่มี LINE ID จึงหาไม่เจอ
+// นัดที่จองผ่าน LINE ในช่วงเปิดจอง นัดที่แอดมินลงเองไม่มี LINE ID จึงหาไม่เจอ
 export async function describeNextAppointment(userId: string, now: number): Promise<string | null> {
-  const limit = now + 30 * DAY_MS;
+  const limit = Date.parse(endOfDay(dateAt(now, BOOKING_DAYS_AHEAD)));
   const [next] = (await findUserEvents("lineUserId", userId, now))
     .filter((event) => {
       const start = Date.parse(event.start?.dateTime ?? "");

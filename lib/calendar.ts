@@ -43,7 +43,7 @@ async function call<T>(method: "GET" | "POST" | "PATCH" | "DELETE", url: string,
 }
 
 export async function listEvents(params: Record<string, string>): Promise<CalendarEvent[]> {
-  // คลินิกมีนัดหลายร้อยรายการใน 14 วัน ค่าเริ่มต้น 250 จะนับคิวไม่ครบ
+  // คลินิกมีนัดหลายร้อยรายการในช่วงเปิดจอง ค่าเริ่มต้น 250 จะนับคิวไม่ครบ
   const query = new URLSearchParams({
     singleEvents: "true",
     maxResults: "2500",
