@@ -228,7 +228,8 @@ const cardActions = (m) => (m?.contents?.footer?.contents ?? []).flatMap((c) => 
 const user = (u) => ({ type: "user", userId: u });
 const text = (t, u = "Usecret1") => send({ type: "message", replyToken: "t", source: user(u), message: { type: "text", id: "1", text: t } });
 const pb = (data, source = user("Usecret1")) => send({ type: "postback", replyToken: "t", source, postback: { data } });
-const items = (m) => m?.quickReply?.items?.map((i) => i.action) ?? [];
+// booking steps are card buttons only; FAQ and doctor answers still use quick reply
+const items = (m) => m?.quickReply ? m.quickReply.items.map((i) => i.action) : cardActions(m);
 
 let failed = 0;
 const check = (name, pass, extra = "") => {
@@ -277,8 +278,8 @@ const seed = (date, hhmm, min, extra = {}) => {
 let r = await text("อยากจองคิวค่ะ");
 let acts = items(r.msg);
 check("booking text -> services", acts.length === 3 && acts[0].label === "ขูดหินปูน", acts.map((a) => a.label).join(","));
-const sameButtons = (m) => m?.type === "flex" && JSON.stringify(cardActions(m).map((a) => a.data ?? a.text)) === JSON.stringify(items(m).map((a) => a.data ?? a.text));
-check("services card: big buttons = quick reply", sameButtons(r.msg) && cardActions(r.msg).length === 3);
+const sameButtons = (m) => m?.type === "flex" && !m.quickReply && cardActions(m).length > 0;
+check("services card: big buttons only, no quick reply", sameButtons(r.msg) && cardActions(r.msg).length === 3);
 
 // self-pay only service: rights step skipped, told why, right fixed to ชำระเอง
 r = await pb(acts.find((a) => a.label === "จัดฟัน").data);
@@ -287,14 +288,14 @@ r = await pb("a=visit&s=จัดฟัน&r=gold&v=old");
 check("self-pay service + gold postback -> back to note, no gold", r.msg?.text?.startsWith("บริการจัดฟันชำระเองค่ะ") && items(r.msg).every((a) => !a.data.includes("r=gold")), r.msg?.text);
 r = await pb(acts[0].data); acts = items(r.msg);
 check("service -> 3 rights", acts.map((a) => a.label).join() === "สปสช (สิทธิบัตรทอง),ประกันสังคม,ชำระเอง", acts.map((a) => a.label).join());
-check("rights card: big buttons = quick reply", sameButtons(r.msg));
+check("rights card: big buttons only, no quick reply", sameButtons(r.msg));
 check("postback data within LINE limit", acts.every((a) => a.data.length <= 300), acts[0].data);
 r = await pb(acts[0].data); acts = items(r.msg);
 check("right -> new/returning", acts.map((a) => a.label).join() === "เคยมาแล้ว,มาครั้งแรก");
-check("visit card: big buttons = quick reply", sameButtons(r.msg));
+check("visit card: big buttons only, no quick reply", sameButtons(r.msg));
 r = await pb(acts[1].data); acts = items(r.msg);
 check("date buttons <= 13, labels <= 20", acts.length > 0 && acts.length <= 13 && acts.every((a) => a.label.length <= 20), acts.map((a) => a.label).join(" | "));
-check("date card: 2 per row, same buttons", sameButtons(r.msg) && r.msg.contents.footer.contents.every((row) => row.type === "box" && row.contents.length === 2), JSON.stringify(r.msg?.contents?.footer?.contents?.[0]));
+check("date card: 2 per row, no quick reply", sameButtons(r.msg) && r.msg.contents.footer.contents.every((row) => row.type === "box" && row.contents.length === 2), JSON.stringify(r.msg?.contents?.footer?.contents?.[0]));
 check("date card: next page button is grey", cardActions(r.msg).length === 13 && r.msg.contents.footer.contents.at(-1).contents.find((b) => b.type === "button" && b.action.label === "วันถัดไป ›")?.style === "secondary");// 30 days do not fit in one quick reply: last button pages forward
 const pageOne = acts.slice(0, -1).map((a) => new URLSearchParams(a.data).get("d"));
 check("first date page ends with วันถัดไป", acts.length === 13 && acts.at(-1).label === "วันถัดไป ›", acts.at(-1)?.label);
@@ -368,7 +369,7 @@ const [okBtn] = card.messages[0].contents.footer.contents.map((c) => c.action.da
 
 r = await text("จองคิว");
 check("second booking blocked", r.msg?.text?.includes("มีนัดอยู่แล้ว"), r.msg?.text);
-const qr = (r.msg?.quickReply?.items ?? []).map((i) => `${i.action.type}:${i.action.text}`).join();
+const qr = items(r.msg).map((a) => `${a.type}:${a.text}`).join();
 check("existing booking offers เลื่อนนัด / ยกเลิกนัด buttons", qr === "message:เลื่อนนัด,message:ยกเลิกนัด", qr);
 const pushCount = pushes.length;
 r = await text("เลื่อนนัด");

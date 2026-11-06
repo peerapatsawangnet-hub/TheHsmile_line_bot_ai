@@ -188,20 +188,10 @@ function freeSlots(date: string, ranges: TimeRange[], minutes: number, events: C
   return slots;
 }
 
-// การ์ดปุ่มใหญ่ พร้อมปุ่มเล็กด้านล่างชุดเดียวกัน columns > 1 จัดปุ่มเป็นตาราง (วัน เวลา)
+// การ์ดปุ่มใหญ่ ไม่มีปุ่มเล็กด้านล่าง (เจ้าของเลือกเอาออกเพราะซ้ำกัน) columns > 1 จัดปุ่มเป็นตาราง (วัน เวลา)
+// ยังจำกัด 13 ปุ่มต่อการ์ด ให้การ์ดไม่ยาวเกินไป วันที่เกินแบ่งหน้าด้วย "วันถัดไป ›"
 function choices(text: string, items: ChoiceButton[], columns = 1): Message {
-  const shown = items.slice(0, MAX_QUICK_REPLIES);
-  return {
-    ...choiceCard(text, shown, columns),
-    quickReply: {
-      items: shown.map(({ label, data, displayText, message }) => ({
-        type: "action",
-        action: message
-          ? { type: "message", label: label.slice(0, 20), text: displayText }
-          : { type: "postback", label: label.slice(0, 20), data, displayText },
-      })),
-    },
-  };
+  return choiceCard(text, items.slice(0, MAX_QUICK_REPLIES), columns);
 }
 
 // ไม่ encode ภาษาไทย เพราะ postback data ยาวได้ไม่เกิน 300 ตัวอักษร
@@ -225,7 +215,7 @@ function flowParams(service: Service, right: string, visit: string, replaces: st
 }
 
 function withPrefix(prefix: string, message: Message): Message {
-  if (message.type === "flex") return { ...withCardNote(prefix, message), quickReply: message.quickReply };
+  if (message.type === "flex") return withCardNote(prefix, message);
   return { ...message, text: `${prefix}\n${(message as messagingApi.TextMessage).text}` } as Message;
 }
 

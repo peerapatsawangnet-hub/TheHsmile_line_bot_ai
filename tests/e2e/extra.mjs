@@ -42,7 +42,7 @@ export async function run(c) {
   let r = await text("จองคิว", U);
   check("reg 1 service text", r.msg?.altText === `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร 062 038 9777 ได้เลยค่ะ 🦷`, r.msg?.altText);
   const bigButtons = r.msg?.contents?.footer?.contents?.map((b) => b.action) ?? [];
-  check("reg 1 big card buttons match quick reply", r.msg?.type === "flex" && bigButtons.length > 0 && JSON.stringify(bigButtons.map((a) => a.data)) === JSON.stringify(items(r.msg).map((a) => a.data)), JSON.stringify(bigButtons));
+  check("reg 1 card only, no quick reply", r.msg?.type === "flex" && !r.msg.quickReply && bigButtons.length === 3, JSON.stringify(bigButtons));
   r = await pb(items(r.msg).find((a) => a.label === "ขูดหินปูน").data, c.user(U));
   check("reg 2 right text", r.msg?.text === "ใช้สิทธิการรักษาแบบไหนคะ");
   r = await pb(items(r.msg).find((a) => a.label === "สปสช (สิทธิบัตรทอง)").data, c.user(U));
