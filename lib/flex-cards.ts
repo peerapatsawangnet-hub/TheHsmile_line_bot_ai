@@ -82,6 +82,40 @@ export function reminderCard(when: string, eventId: string): messagingApi.FlexMe
   };
 }
 
+export type ChoiceButton = { label: string; data: string; displayText: string };
+
+// ขั้นเลือกบริการ: ปุ่มเล็กด้านล่าง (quick reply) ลูกค้ามักไม่เห็น จึงทำเป็นการ์ดปุ่มใหญ่ด้วย
+// ข้อความคำถามเหมือนเดิมทุกตัวอักษร note คือบรรทัดที่เติมด้านบน เช่น เวลาว่างของวันที่ถาม
+export function choiceCard(question: string, buttons: ChoiceButton[], note = ""): messagingApi.FlexMessage {
+  return {
+    type: "flex",
+    altText: note ? `${note}\n${question}` : question,
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        contents: [
+          ...(note ? [{ type: "text" as const, text: note, wrap: true, weight: "bold" as const }] : []),
+          { type: "text", text: question, wrap: true, size: "sm", color: "#666666" },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: buttons.map(({ label, data, displayText }) => ({
+          type: "button" as const,
+          style: "primary" as const,
+          height: "sm" as const,
+          action: { type: "postback" as const, label: label.slice(0, 40), data, displayText },
+        })),
+      },
+    },
+  };
+}
+
 export function handoffCard(): messagingApi.FlexMessage {
   return {
     type: "flex",

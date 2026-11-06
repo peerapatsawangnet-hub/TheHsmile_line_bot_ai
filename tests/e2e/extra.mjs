@@ -40,7 +40,9 @@ export async function run(c) {
   const U = "Ureg";
   const a0 = adminPushes().length;
   let r = await text("จองคิว", U);
-  check("reg 1 service text", r.msg?.text === `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร 062 038 9777 ได้เลยค่ะ 🦷`, r.msg?.text);
+  check("reg 1 service text", r.msg?.altText === `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร 062 038 9777 ได้เลยค่ะ 🦷`, r.msg?.altText);
+  const bigButtons = r.msg?.contents?.footer?.contents?.map((b) => b.action) ?? [];
+  check("reg 1 big card buttons match quick reply", r.msg?.type === "flex" && bigButtons.length > 0 && JSON.stringify(bigButtons.map((a) => a.data)) === JSON.stringify(items(r.msg).map((a) => a.data)), JSON.stringify(bigButtons));
   r = await pb(items(r.msg).find((a) => a.label === "ขูดหินปูน").data, c.user(U));
   check("reg 2 right text", r.msg?.text === "ใช้สิทธิการรักษาแบบไหนคะ");
   r = await pb(items(r.msg).find((a) => a.label === "สปสช (สิทธิบัตรทอง)").data, c.user(U));
@@ -153,7 +155,7 @@ export async function run(c) {
   plan.set("มีคิวว่างไหมคะ", "500");
   g = c.geminiCalls();
   r = await text("มีคิวว่างไหมคะ", "Ufb");
-  check("Gemini 500 + booking words -> booking flow", r.msg?.text?.startsWith("ต้องการนัดบริการใดคะ"), r.msg?.text);
+  check("Gemini 500 + booking words -> booking flow", r.msg?.altText?.startsWith("ต้องการนัดบริการใดคะ"), r.msg?.altText);
   check("500 is not retried", c.geminiCalls() === g + 1);
 
   plan.set("busy-once", { once503: cls("thanks") });
@@ -195,14 +197,14 @@ export async function run(c) {
 
   plan.set("pre3", cls("booking", { slots: { service: "ไม่มีบริการนี้", date_text: "วันจันทร์20" } }));
   r = await text("pre3", "Upre3");
-  check("unknown service -> service list", r.msg?.text?.startsWith("ต้องการนัดบริการใดคะ"));
+  check("unknown service -> service list", r.msg?.altText?.startsWith("ต้องการนัดบริการใดคะ"));
 
   // "วัน... มีคิวว่างไหม": free times of that day first, then only services still bookable that day
   const SERVICE_TEXT = `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร 062 038 9777 ได้เลยค่ะ 🦷`;
   plan.set("free1", cls("booking", { slots: { date_text: be } }));
   r = await text("free1", "Ufree1");
-  let lines = r.msg?.text?.split("\n") ?? [];
-  check("free day -> times then service question", /^วัน.+ มีคิวว่างช่วง \d\d:\d\d–\d\d:\d\d(, \d\d:\d\d–\d\d:\d\d)* น\. ค่ะ$/.test(lines[0] ?? "") && lines.at(-1) === SERVICE_TEXT, r.msg?.text);
+  let lines = r.msg?.altText?.split("\n") ?? [];
+  check("free day -> times then service question", /^วัน.+ มีคิวว่างช่วง \d\d:\d\d–\d\d:\d\d(, \d\d:\d\d–\d\d:\d\d)* น\. ค่ะ$/.test(lines[0] ?? "") && lines.at(-1) === SERVICE_TEXT, r.msg?.altText);
   check("free day -> buttons carry the date", items(r.msg).length > 0 && items(r.msg).every((a) => new URLSearchParams(a.data).get("pd") === target), items(r.msg).map((a) => a.data).join(" | "));
   r = await pb(items(r.msg).find((a) => a.label === "ขูดหินปูน").data, c.user("Ufree1"));
   r = await pb(items(r.msg)[0].data, c.user("Ufree1"));
@@ -212,13 +214,13 @@ export async function run(c) {
   const [ty, tm, td] = c.closedTue.split("-").map(Number);
   plan.set("free2", cls("booking", { slots: { date_text: `${td}/${tm}/${(ty + 543) % 100}` } }));
   r = await text("free2", "Ufree2");
-  lines = r.msg?.text?.split("\n") ?? [];
-  check("closed day -> no times, plain service list", lines[0]?.endsWith(" ไม่มีคิวว่างค่ะ") && lines[1] === SERVICE_TEXT && items(r.msg).length > 0 && items(r.msg).every((a) => !a.data.includes("pd=")), r.msg?.text);
+  lines = r.msg?.altText?.split("\n") ?? [];
+  check("closed day -> no times, plain service list", lines[0]?.endsWith(" ไม่มีคิวว่างค่ะ") && lines[1] === SERVICE_TEXT && items(r.msg).length > 0 && items(r.msg).every((a) => !a.data.includes("pd=")), r.msg?.altText);
 
   // Gemini left date_text empty: the day is read from the customer's own words
   plan.set("วันนี้มีคิวว่างไหมคะ", cls("booking"));
   r = await text("วันนี้มีคิวว่างไหมคะ", "Ufree3");
-  check("date read from message", /^วัน.+ (มีคิวว่างช่วง .+ น\. ค่ะ|ไม่มีคิวว่างค่ะ)\n/.test(r.msg?.text ?? ""), r.msg?.text);
+  check("date read from message", /^วัน.+ (มีคิวว่างช่วง .+ น\. ค่ะ|ไม่มีคิวว่างค่ะ)\n/.test(r.msg?.altText ?? ""), r.msg?.altText);
 
   plan.set("pre4", cls("booking", { multiple_patients: true }));
   r = await text("pre4", "Upre4");

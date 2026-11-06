@@ -21,7 +21,7 @@ import {
   CLINIC_PHONE,
 } from "./config";
 import { AdminNotice, hasAdminChannel, sendToAdmin } from "./admin-channel";
-import { AdminCardAction, BOOKING_CARD_NOTE, bookingActions, bookingRequestCard, reminderCard } from "./flex-cards";
+import { AdminCardAction, BOOKING_CARD_NOTE, bookingActions, bookingRequestCard, choiceCard, reminderCard } from "./flex-cards";
 import type { Slots } from "./gemini";
 import { notifyAdmin } from "./handoff";
 import { getLineClient } from "./line";
@@ -304,20 +304,21 @@ function existingBookingMessage(event: CalendarEvent): Message {
 
 class NoServicesError extends Error {}
 
-async function askService(prefill: Prefill = {}, only?: Service[]): Promise<Message> {
+// การ์ดปุ่มใหญ่ และปุ่มเล็กด้านล่างแบบเดิม note คือบรรทัดที่เติมด้านบนคำถาม
+async function askService(prefill: Prefill = {}, only?: Service[], note = ""): Promise<Message> {
   const services = only ?? await getServices();
   if (services.length === 0) {
     console.error(JSON.stringify({ tag: "booking_no_services" }));
     throw new NoServicesError("no active services");
   }
-  return quickReply(
-    `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร ${CLINIC_PHONE} ได้เลยค่ะ 🦷`,
-    services.map(({ name }) => ({
-      label: name,
-      data: postbackData({ a: "svc", s: name, ...prefillParams(prefill) }),
-      displayText: name,
-    })),
-  );
+  const question = `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร ${CLINIC_PHONE} ได้เลยค่ะ 🦷`;
+  const buttons = services.slice(0, MAX_QUICK_REPLIES).map(({ name }) => ({
+    label: name,
+    data: postbackData({ a: "svc", s: name, ...prefillParams(prefill) }),
+    displayText: name,
+  }));
+  const { quickReply: small } = quickReply(question, buttons) as messagingApi.TextMessage;
+  return { ...choiceCard(question, buttons, note), quickReply: small };
 }
 
 // รวมเวลาว่างของทุกบริการเป็นช่วง เช่น 10:00–12:00, 13:30–19:00
@@ -353,13 +354,10 @@ async function askServiceForDate(services: Service[], prefill: Prefill, date: st
     .filter(({ slots }) => slots.length > 0);
 
   if (open.length === 0) {
-    return withPrefix(`${day} ไม่มีคิวว่างค่ะ`, await askService({ right: prefill.right }));
+    return askService({ right: prefill.right }, undefined, `${day} ไม่มีคิวว่างค่ะ`);
   }
   const missing = open.length < services.length ? "\nบริการที่ไม่อยู่ในปุ่มด้านล่าง วันนั้นคิวเต็มหรือคุณหมอไม่เข้าค่ะ" : "";
-  return withPrefix(
-    `${day} มีคิวว่างช่วง ${freeSpans(open)} น. ค่ะ${missing}`,
-    await askService(prefill, open.map(({ service }) => service)),
-  );
+  return askService(prefill, open.map(({ service }) => service), `${day} มีคิวว่างช่วง ${freeSpans(open)} น. ค่ะ${missing}`);
 }
 
 function askRight(service: Service, prefill: Prefill = {}): Message {
