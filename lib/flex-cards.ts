@@ -1,5 +1,5 @@
 import { messagingApi } from "@line/bot-sdk";
-import { CLINIC_PHONE, CLINIC_PHONE_URI, HANDOFF_REPLY } from "./config";
+import { BUTTON_COLOR, CLINIC_PHONE, CLINIC_PHONE_URI, HANDOFF_REPLY } from "./config";
 
 export const BOOKING_CARD_NOTE = "เติม HN หรือแก้เวลาใน Google Calendar ก่อนกดยืนยันได้ ลูกค้าจะได้รับเวลาล่าสุด";
 
@@ -69,6 +69,7 @@ export function reminderCard(when: string, eventId: string): messagingApi.FlexMe
           {
             type: "button",
             style: "primary",
+            color: BUTTON_COLOR,
             action: { type: "postback", label: "ยืนยันมาตามนัด", data: `a=attend&e=${eventId}`, displayText: "ยืนยันมาตามนัด" },
           },
           {
@@ -90,6 +91,7 @@ function choiceButton({ label, data, displayText, secondary, message }: ChoiceBu
   return {
     type: "button",
     style: secondary ? "secondary" : "primary",
+    ...(secondary ? {} : { color: BUTTON_COLOR }),
     height: "sm",
     flex: 1,
     action: message
@@ -165,6 +167,7 @@ export function handoffCard(): messagingApi.FlexMessage {
         contents: [{
           type: "button",
           style: "primary",
+          color: BUTTON_COLOR,
           action: { type: "uri", label: "โทรหาคลินิก", uri: CLINIC_PHONE_URI },
         }],
       },

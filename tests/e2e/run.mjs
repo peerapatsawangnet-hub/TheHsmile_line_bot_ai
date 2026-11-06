@@ -296,6 +296,7 @@ check("visit card: big buttons only, no quick reply", sameButtons(r.msg));
 r = await pb(acts[1].data); acts = items(r.msg);
 check("date buttons <= 13, labels <= 20", acts.length > 0 && acts.length <= 13 && acts.every((a) => a.label.length <= 20), acts.map((a) => a.label).join(" | "));
 check("date card: 2 per row, no quick reply", sameButtons(r.msg) && r.msg.contents.footer.contents.every((row) => row.type === "box" && row.contents.length === 2), JSON.stringify(r.msg?.contents?.footer?.contents?.[0]));
+check("date card: main buttons blue", r.msg.contents.footer.contents[0].contents[0].color === "#2563EB");
 check("date card: next page button is grey", cardActions(r.msg).length === 13 && r.msg.contents.footer.contents.at(-1).contents.find((b) => b.type === "button" && b.action.label === "วันถัดไป ›")?.style === "secondary");// 30 days do not fit in one quick reply: last button pages forward
 const pageOne = acts.slice(0, -1).map((a) => new URLSearchParams(a.data).get("d"));
 check("first date page ends with วันถัดไป", acts.length === 13 && acts.at(-1).label === "วันถัดไป ›", acts.at(-1)?.label);

@@ -21,6 +21,8 @@ export const BOOKING_MIN_LEAD_MINUTES = 60;
 export const BOOKING_SLOT_MINUTES = 15;
 export const BOOKING_CAPACITY_PER_SLOT = 1;  // จำนวนนัดสูงสุดต่อช่วงเวลา 1 คือไม่ซ้อนนัดเดิม
 export const BOOKING_HOLD_MINUTES = 15;      // เวลากันคิวระหว่างรอลูกค้าพิมพ์ชื่อและเบอร์
+// สีปุ่มหลักในการ์ดที่ลูกค้าเห็น (จองคิว เตือนนัด ติดต่อกลับ) เจ้าของเลือกสีน้ำเงิน
+export const BUTTON_COLOR = "#2563EB";
 export const CALENDAR_COLOR_PENDING = "8";      // Graphite: เทา รอแอดมินยืนยัน
 export const CALENDAR_COLOR_UNCONFIRMED = "7";  // Peacock: ฟ้า แอดมินยืนยันแล้ว รอคนไข้คอนเฟิร์ม
 export const CALENDAR_COLOR_CONFIRMED = "3";    // Grape: ม่วง คนไข้คอนเฟิร์มแล้ว
