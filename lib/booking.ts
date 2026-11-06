@@ -21,7 +21,16 @@ import {
   CLINIC_PHONE,
 } from "./config";
 import { AdminNotice, hasAdminChannel, sendToAdmin } from "./admin-channel";
-import { AdminCardAction, BOOKING_CARD_NOTE, bookingActions, bookingRequestCard, choiceCard, reminderCard } from "./flex-cards";
+import {
+  AdminCardAction,
+  BOOKING_CARD_NOTE,
+  bookingActions,
+  bookingRequestCard,
+  ChoiceButton,
+  choiceCard,
+  reminderCard,
+  withCardNote,
+} from "./flex-cards";
 import type { Slots } from "./gemini";
 import { notifyAdmin } from "./handoff";
 import { getLineClient } from "./line";
@@ -179,14 +188,17 @@ function freeSlots(date: string, ranges: TimeRange[], minutes: number, events: C
   return slots;
 }
 
-function quickReply(text: string, items: { label: string; data: string; displayText: string }[]): Message {
+// การ์ดปุ่มใหญ่ พร้อมปุ่มเล็กด้านล่างชุดเดียวกัน columns > 1 จัดปุ่มเป็นตาราง (วัน เวลา)
+function choices(text: string, items: ChoiceButton[], columns = 1): Message {
+  const shown = items.slice(0, MAX_QUICK_REPLIES);
   return {
-    type: "text",
-    text,
+    ...choiceCard(text, shown, columns),
     quickReply: {
-      items: items.slice(0, MAX_QUICK_REPLIES).map(({ label, data, displayText }) => ({
+      items: shown.map(({ label, data, displayText, message }) => ({
         type: "action",
-        action: { type: "postback", label: label.slice(0, 20), data, displayText },
+        action: message
+          ? { type: "message", label: label.slice(0, 20), text: displayText }
+          : { type: "postback", label: label.slice(0, 20), data, displayText },
       })),
     },
   };
@@ -213,6 +225,7 @@ function flowParams(service: Service, right: string, visit: string, replaces: st
 }
 
 function withPrefix(prefix: string, message: Message): Message {
+  if (message.type === "flex") return { ...withCardNote(prefix, message), quickReply: message.quickReply };
   return { ...message, text: `${prefix}\n${(message as messagingApi.TextMessage).text}` } as Message;
 }
 
@@ -289,36 +302,31 @@ export async function findUserEvents(key: string, userId: string, now: number): 
 }
 
 function existingBookingMessage(event: CalendarEvent): Message {
-  return {
-    type: "text",
-    text: `คุณลูกค้ามีนัดอยู่แล้ว${formatWhen(event.start?.dateTime ?? "")} ค่ะ หากต้องการเปลี่ยนแปลง พิมพ์ "เปลี่ยนนัด" หรือโทร ${CLINIC_PHONE} ได้เลยนะคะ`,
-    // ส่งเป็นข้อความ จึงเข้าคำสั่งตรงเดียวกับที่ลูกค้าพิมพ์เอง: แจ้งแอดมินให้จัดการ
-    quickReply: {
-      items: ["เลื่อนนัด", "ยกเลิกนัด"].map((label) => ({
-        type: "action" as const,
-        action: { type: "message" as const, label, text: label },
-      })),
-    },
-  };
+  // ส่งเป็นข้อความ จึงเข้าคำสั่งตรงเดียวกับที่ลูกค้าพิมพ์เอง
+  return choices(
+    `คุณลูกค้ามีนัดอยู่แล้ว${formatWhen(event.start?.dateTime ?? "")} ค่ะ หากต้องการเปลี่ยนแปลง พิมพ์ "เปลี่ยนนัด" หรือโทร ${CLINIC_PHONE} ได้เลยนะคะ`,
+    ["เลื่อนนัด", "ยกเลิกนัด"].map((label, i) => ({ label, data: "", displayText: label, message: true, secondary: i > 0 })),
+  );
 }
 
 class NoServicesError extends Error {}
 
-// การ์ดปุ่มใหญ่ และปุ่มเล็กด้านล่างแบบเดิม note คือบรรทัดที่เติมด้านบนคำถาม
+// note คือบรรทัดที่เติมด้านบนคำถาม
 async function askService(prefill: Prefill = {}, only?: Service[], note = ""): Promise<Message> {
   const services = only ?? await getServices();
   if (services.length === 0) {
     console.error(JSON.stringify({ tag: "booking_no_services" }));
     throw new NoServicesError("no active services");
   }
-  const question = `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร ${CLINIC_PHONE} ได้เลยค่ะ 🦷`;
-  const buttons = services.slice(0, MAX_QUICK_REPLIES).map(({ name }) => ({
-    label: name,
-    data: postbackData({ a: "svc", s: name, ...prefillParams(prefill) }),
-    displayText: name,
-  }));
-  const { quickReply: small } = quickReply(question, buttons) as messagingApi.TextMessage;
-  return { ...choiceCard(question, buttons, note), quickReply: small };
+  const message = choices(
+    `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร ${CLINIC_PHONE} ได้เลยค่ะ 🦷`,
+    services.map(({ name }) => ({
+      label: name,
+      data: postbackData({ a: "svc", s: name, ...prefillParams(prefill) }),
+      displayText: name,
+    })),
+  );
+  return note ? withPrefix(note, message) : message;
 }
 
 // รวมเวลาว่างของทุกบริการเป็นช่วง เช่น 10:00–12:00, 13:30–19:00
@@ -360,9 +368,16 @@ async function askServiceForDate(services: Service[], prefill: Prefill, date: st
   return askService(prefill, open.map(({ service }) => service), `${day} มีคิวว่างช่วง ${freeSpans(open)} น. ค่ะ${missing}`);
 }
 
+// บริการที่แท็บบริการตั้ง accepts_rights = FALSE ใช้ได้แค่ชำระเอง ข้ามขั้นเลือกสิทธิ
 function askRight(service: Service, prefill: Prefill = {}): Message {
+  if (!service.acceptsRights) {
+    return withPrefix(
+      `บริการ${service.name}ชำระเองค่ะ ใช้สิทธิบัตรทองหรือประกันสังคมไม่ได้นะคะ`,
+      askVisit(service, "self", { ...prefill, right: undefined }),
+    );
+  }
   if (prefill.right) return askVisit(service, prefill.right, prefill);
-  return quickReply(
+  return choices(
     "ใช้สิทธิการรักษาแบบไหนคะ",
     Object.entries(RIGHTS).map(([code, { label }]) => ({
       label,
@@ -373,7 +388,7 @@ function askRight(service: Service, prefill: Prefill = {}): Message {
 }
 
 function askVisit(service: Service, right: string, prefill: Prefill = {}): Message {
-  return quickReply(
+  return choices(
     "เคยมาที่คลินิกแล้วหรือมาครั้งแรกคะ",
     Object.entries(VISITS).map(([code, { label }]) => ({
       label,
@@ -425,7 +440,7 @@ async function askDate(
     doctorDays(service, now),
   ]);
 
-  const items = [];
+  const items: ChoiceButton[] = [];
   for (let i = 0; i <= BOOKING_DAYS_AHEAD; i++) {
     const date = dateAt(now, i);
     if (date < from) continue;
@@ -452,10 +467,11 @@ async function askDate(
       label: "วันถัดไป ›",
       data: postbackData({ a: "dates", ...flowParams(service, right, visit, replaces), f: next }),
       displayText: "ดูวันถัดไป",
+      secondary: true,
     });
-    return quickReply("ต้องการนัดวันไหนคะ", page);
+    return choices("ต้องการนัดวันไหนคะ", page, 2);
   }
-  return quickReply("ต้องการนัดวันไหนคะ", items);
+  return choices("ต้องการนัดวันไหนคะ", items, 2);
 }
 
 async function slotsForDate(service: Service, date: string, now: number): Promise<number[]> {
@@ -489,7 +505,7 @@ async function askPeriod(
       data: postbackData({ a: "period", ...flowParams(service, right, visit, replaces), d: date, p: code }),
       displayText: label,
     }));
-  return quickReply(`${formatDate(`${date}T12:00:00${OFFSET}`)} สะดวกช่วงไหนคะ`, items);
+  return choices(`${formatDate(`${date}T12:00:00${OFFSET}`)} สะดวกช่วงไหนคะ`, items);
 }
 
 async function askTime(
@@ -507,13 +523,14 @@ async function askTime(
     return withPrefix("ช่วงนี้คิวเต็มแล้วค่ะ", await askPeriod(service, right, visit, date, now, replaces));
   }
 
-  return quickReply(
+  return choices(
     "ต้องการเวลาไหนคะ",
     slots.map((start) => ({
       label: clock(start),
       data: postbackData({ a: "slot", ...flowParams(service, right, visit, replaces), d: date, p: period, t: String(start) }),
       displayText: `${clock(start)} น.`,
     })),
+    3,
   );
 }
 
@@ -743,9 +760,9 @@ export async function startCancel(userId: string | undefined): Promise<Message |
       .find((e) => !e.extendedProperties?.private?.replaces);
     if (!event) return null;
     if (event.extendedProperties?.private?.cancelRequested) return pendingCancelMessage(event);
-    return quickReply(`ต้องการยกเลิกนัด${formatWhen(event.start?.dateTime ?? "")} ใช่ไหมคะ`, [
+    return choices(`ต้องการยกเลิกนัด${formatWhen(event.start?.dateTime ?? "")} ใช่ไหมคะ`, [
       { label: "ยกเลิกนัด", data: postbackData({ a: "cancel", e: event.id }), displayText: "ยกเลิกนัด" },
-      { label: "ไม่ยกเลิก", data: postbackData({ a: "keep", e: event.id }), displayText: "ไม่ยกเลิก" },
+      { label: "ไม่ยกเลิก", data: postbackData({ a: "keep", e: event.id }), displayText: "ไม่ยกเลิก", secondary: true },
     ]);
   } catch (err) {
     logBookingError(err);
@@ -893,7 +910,9 @@ export async function handleBookingPostback(data: string, userId: string | undef
     if (action === "svc") return askRight(service, prefill);
 
     const right = params.get("r") ?? "";
-    if (!RIGHTS[right]) return askRight(service, prefill);
+    // ปุ่มเก่าหรือปุ่มที่แก้เอง: สิทธิที่บริการนี้ใช้ไม่ได้ ให้กลับไปขั้นสิทธิ เลื่อนนัดใช้สิทธิของนัดเดิม
+    const rightAllowed = service.acceptsRights || right === "self" || params.has("x");
+    if (!RIGHTS[right] || !rightAllowed) return askRight(service, prefill);
     if (action === "right") return askVisit(service, right, prefill);
 
     const visit = params.get("v") ?? "";

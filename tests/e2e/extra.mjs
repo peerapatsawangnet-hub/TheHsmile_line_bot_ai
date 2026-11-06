@@ -54,6 +54,7 @@ export async function run(c) {
   check("reg 5 period text", r.msg?.text?.endsWith(" สะดวกช่วงไหนคะ"), r.msg?.text);
   r = await pb(items(r.msg).find((a) => a.label === "ช่วงเช้า").data, c.user(U));
   check("reg 6 time text", r.msg?.text === "ต้องการเวลาไหนคะ");
+  check("reg 6 time card: 3 per row", r.msg?.type === "flex" && r.msg.contents.footer.contents.every((row) => row.type === "box" && row.contents.length === 3));
   r = await pb(items(r.msg).find((a) => a.label === "10:45").data, c.user(U));
   check("reg 7 hold text", r.msg?.text?.startsWith("เจ้าหน้าที่จะบันทึกการนัดหมาย วัน") && r.msg.text.includes("เวลา 10:45 น. นะคะ กรุณาพิมพ์ชื่อ-นามสกุล และเบอร์โทร") && r.msg.text.includes("0812345678\nหากไม่ต้องการ"), r.msg?.text);
   check("reg no admin push during steps 1-7", adminPushes().length === a0);

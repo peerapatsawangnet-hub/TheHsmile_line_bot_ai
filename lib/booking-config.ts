@@ -2,7 +2,8 @@ import Papa from "papaparse";
 import { SHEET_CACHE_MS, SHEET_TIMEOUT_MS } from "./config";
 
 // needsDoctor: นัดได้เฉพาะวันที่คุณหมอเข้า ค่าว่างถือว่าต้องใช้คุณหมอ
-export type Service = { name: string; minutes: number; needsDoctor: boolean };
+// acceptsRights: ใช้สิทธิ สปสช และประกันสังคมได้ ค่าว่างถือว่าใช้ได้ FALSE คือชำระเองเท่านั้น
+export type Service = { name: string; minutes: number; needsDoctor: boolean; acceptsRights: boolean };
 export type TimeRange = { open: number; close: number };
 export type BookingHours = {
   // คีย์คือเลขวันแบบ Date.getDay() วันที่ไม่มีแถวถือว่าปิด
@@ -60,7 +61,12 @@ export async function getServices(): Promise<Service[]> {
     const name = row.service?.trim();
     const minutes = Number(row.duration_minutes);
     if (!name || !(minutes > 0) || row.active?.trim().toUpperCase() === "FALSE") return [];
-    return [{ name, minutes, needsDoctor: row.needs_doctor?.trim().toUpperCase() !== "FALSE" }];
+    return [{
+      name,
+      minutes,
+      needsDoctor: row.needs_doctor?.trim().toUpperCase() !== "FALSE",
+      acceptsRights: row.accepts_rights?.trim().toUpperCase() !== "FALSE",
+    }];
   });
 }
 
