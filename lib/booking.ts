@@ -51,6 +51,9 @@ const BOOKING_TRIGGERS = ["จองคิว", "จองนัด", "ขอน
 // ok/no: ยืนยันหรือปฏิเสธนัดและคำขอเลื่อนนัด cx/ck: ยืนยันยกเลิกนัดหรือไม่ยกเลิก
 const ADMIN_ACTIONS = new Set(["ok", "no", "cx", "ck"]);
 const CANCEL_PREFIX = "[ขอยกเลิก] ";
+const OTHER_SERVICE_LABEL = "บริการอื่น ๆ / ติดต่อแอดมิน";
+// แอดมินเห็นข้อความนี้ในกลุ่ม จึงรู้ว่าลูกค้าอยากนัดบริการที่ไม่มีในปุ่ม
+const OTHER_SERVICE_TEXT = "ขอแอดมิน (นัดบริการอื่น)";
 
 const RIGHTS: Record<string, { label: string; summary: string }> = {
   gold: { label: "สปสช (สิทธิบัตรทอง)", summary: "สปสช" },
@@ -310,11 +313,15 @@ async function askService(prefill: Prefill = {}, only?: Service[], note = ""): P
   }
   const message = choices(
     `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร ${CLINIC_PHONE} ได้เลยค่ะ 🦷`,
-    services.map(({ name }) => ({
-      label: name,
-      data: postbackData({ a: "svc", s: name, ...prefillParams(prefill) }),
-      displayText: name,
-    })),
+    [
+      ...services.slice(0, MAX_QUICK_REPLIES - 1).map(({ name }) => ({
+        label: name,
+        data: postbackData({ a: "svc", s: name, ...prefillParams(prefill) }),
+        displayText: name,
+      })),
+      // ปุ่มสุดท้ายเสมอ ส่งเป็นข้อความที่มี "ขอแอดมิน" จึงเข้าคำสั่งตรง: การ์ดติดต่อกลับ + แจ้งแอดมิน
+      { label: OTHER_SERVICE_LABEL, data: "", displayText: OTHER_SERVICE_TEXT, message: true },
+    ],
   );
   return note ? withPrefix(note, message) : message;
 }

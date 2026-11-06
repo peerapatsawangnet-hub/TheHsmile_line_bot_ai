@@ -277,9 +277,15 @@ const seed = (date, hhmm, min, extra = {}) => {
 
 let r = await text("อยากจองคิวค่ะ");
 let acts = items(r.msg);
-check("booking text -> services", acts.length === 3 && acts[0].label === "ขูดหินปูน", acts.map((a) => a.label).join(","));
+check("booking text -> services", acts.length === 4 && acts[0].label === "ขูดหินปูน" && acts.at(-1).type === "message" && acts.at(-1).text === "ขอแอดมิน (นัดบริการอื่น)", acts.map((a) => a.label).join(","));
 const sameButtons = (m) => m?.type === "flex" && !m.quickReply && cardActions(m).length > 0;
-check("services card: big buttons only, no quick reply", sameButtons(r.msg) && cardActions(r.msg).length === 3);
+check("services card: big buttons only, no quick reply", sameButtons(r.msg) && cardActions(r.msg).length === 4);
+{
+  const before = pushes.length;
+  const other = await text(acts.at(-1).text, "Uother");
+  const notice = pushes.slice(before).at(-1)?.messages[0];
+  check("other service button -> handoff card + admin sees why", other.msg?.altText && other.msg.type === "flex" && JSON.stringify(notice ?? "").includes("ขอแอดมิน (นัดบริการอื่น)"), JSON.stringify(notice).slice(0, 160));
+}
 
 // self-pay only service: rights step skipped, told why, right fixed to ชำระเอง
 r = await pb(acts.find((a) => a.label === "จัดฟัน").data);

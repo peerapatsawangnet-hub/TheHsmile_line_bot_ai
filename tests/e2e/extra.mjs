@@ -42,7 +42,7 @@ export async function run(c) {
   let r = await text("จองคิว", U);
   check("reg 1 service text", r.msg?.altText === `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร 062 038 9777 ได้เลยค่ะ 🦷`, r.msg?.altText);
   const bigButtons = r.msg?.contents?.footer?.contents?.map((b) => b.action) ?? [];
-  check("reg 1 card only, no quick reply", r.msg?.type === "flex" && !r.msg.quickReply && bigButtons.length === 3, JSON.stringify(bigButtons));
+  check("reg 1 card only, no quick reply", r.msg?.type === "flex" && !r.msg.quickReply && bigButtons.length === 4, JSON.stringify(bigButtons));
   r = await pb(items(r.msg).find((a) => a.label === "ขูดหินปูน").data, c.user(U));
   check("reg 2 right text", r.msg?.text === "ใช้สิทธิการรักษาแบบไหนคะ");
   r = await pb(items(r.msg).find((a) => a.label === "สปสช (สิทธิบัตรทอง)").data, c.user(U));
@@ -206,7 +206,7 @@ export async function run(c) {
   r = await text("free1", "Ufree1");
   let lines = r.msg?.altText?.split("\n") ?? [];
   check("free day -> times then service question", /^วัน.+ มีคิวว่างช่วง \d\d:\d\d–\d\d:\d\d(, \d\d:\d\d–\d\d:\d\d)* น\. ค่ะ$/.test(lines[0] ?? "") && lines.at(-1) === SERVICE_TEXT, r.msg?.altText);
-  check("free day -> buttons carry the date", items(r.msg).length > 0 && items(r.msg).every((a) => new URLSearchParams(a.data).get("pd") === target), items(r.msg).map((a) => a.data).join(" | "));
+  check("free day -> buttons carry the date", items(r.msg).length > 0 && items(r.msg).filter((a) => a.type === "postback").every((a) => new URLSearchParams(a.data).get("pd") === target), items(r.msg).map((a) => a.data).join(" | "));
   r = await pb(items(r.msg).find((a) => a.label === "ขูดหินปูน").data, c.user("Ufree1"));
   r = await pb(items(r.msg)[0].data, c.user("Ufree1"));
   r = await pb(items(r.msg)[0].data, c.user("Ufree1"));
@@ -216,7 +216,7 @@ export async function run(c) {
   plan.set("free2", cls("booking", { slots: { date_text: `${td}/${tm}/${(ty + 543) % 100}` } }));
   r = await text("free2", "Ufree2");
   lines = r.msg?.altText?.split("\n") ?? [];
-  check("closed day -> no times, plain service list", lines[0]?.endsWith(" ไม่มีคิวว่างค่ะ") && lines[1] === SERVICE_TEXT && items(r.msg).length > 0 && items(r.msg).every((a) => !a.data.includes("pd=")), r.msg?.altText);
+  check("closed day -> no times, plain service list", lines[0]?.endsWith(" ไม่มีคิวว่างค่ะ") && lines[1] === SERVICE_TEXT && items(r.msg).length > 0 && items(r.msg).every((a) => !(a.data ?? "").includes("pd=")), r.msg?.altText);
 
   // Gemini left date_text empty: the day is read from the customer's own words
   plan.set("วันนี้มีคิวว่างไหมคะ", cls("booking"));
