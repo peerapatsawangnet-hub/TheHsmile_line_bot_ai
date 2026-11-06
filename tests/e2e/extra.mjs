@@ -197,6 +197,29 @@ export async function run(c) {
   r = await text("pre3", "Upre3");
   check("unknown service -> service list", r.msg?.text?.startsWith("ต้องการนัดบริการใดคะ"));
 
+  // "วัน... มีคิวว่างไหม": free times of that day first, then only services still bookable that day
+  const SERVICE_TEXT = `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร 062 038 9777 ได้เลยค่ะ 🦷`;
+  plan.set("free1", cls("booking", { slots: { date_text: be } }));
+  r = await text("free1", "Ufree1");
+  let lines = r.msg?.text?.split("\n") ?? [];
+  check("free day -> times then service question", /^วัน.+ มีคิวว่างช่วง \d\d:\d\d–\d\d:\d\d(, \d\d:\d\d–\d\d:\d\d)* น\. ค่ะ$/.test(lines[0] ?? "") && lines.at(-1) === SERVICE_TEXT, r.msg?.text);
+  check("free day -> buttons carry the date", items(r.msg).length > 0 && items(r.msg).every((a) => new URLSearchParams(a.data).get("pd") === target), items(r.msg).map((a) => a.data).join(" | "));
+  r = await pb(items(r.msg).find((a) => a.label === "ขูดหินปูน").data, c.user("Ufree1"));
+  r = await pb(items(r.msg)[0].data, c.user("Ufree1"));
+  r = await pb(items(r.msg)[0].data, c.user("Ufree1"));
+  check("free day -> after right/visit goes straight to periods", r.msg?.text?.endsWith(" สะดวกช่วงไหนคะ"), r.msg?.text);
+
+  const [ty, tm, td] = c.closedTue.split("-").map(Number);
+  plan.set("free2", cls("booking", { slots: { date_text: `${td}/${tm}/${(ty + 543) % 100}` } }));
+  r = await text("free2", "Ufree2");
+  lines = r.msg?.text?.split("\n") ?? [];
+  check("closed day -> no times, plain service list", lines[0]?.endsWith(" ไม่มีคิวว่างค่ะ") && lines[1] === SERVICE_TEXT && items(r.msg).length > 0 && items(r.msg).every((a) => !a.data.includes("pd=")), r.msg?.text);
+
+  // Gemini left date_text empty: the day is read from the customer's own words
+  plan.set("วันนี้มีคิวว่างไหมคะ", cls("booking"));
+  r = await text("วันนี้มีคิวว่างไหมคะ", "Ufree3");
+  check("date read from message", /^วัน.+ (มีคิวว่างช่วง .+ น\. ค่ะ|ไม่มีคิวว่างค่ะ)\n/.test(r.msg?.text ?? ""), r.msg?.text);
+
   plan.set("pre4", cls("booking", { multiple_patients: true }));
   r = await text("pre4", "Upre4");
   check("multiple patients -> silent + admin", r.msg === null && lastAdmin()?.text?.includes("เรื่อง: จองให้หลายคน"));

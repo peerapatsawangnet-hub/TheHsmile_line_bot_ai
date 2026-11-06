@@ -243,8 +243,10 @@ function periodOf(start: number): string {
 }
 
 // slot ที่แปลงไม่ได้ทิ้งไป ให้ flow ถามเอง
-function prefillFromSlots(slots: Slots, now: number): Prefill {
-  const parsed = slots.date_text ? parseDateText(slots.date_text, now) : null;
+// ไม่มี date_text (Gemini ไม่ใส่หรือใช้ไม่ได้) ลองอ่านวันจากข้อความลูกค้า เช่น "วันนี้มีคิวว่างไหม"
+function prefillFromSlots(slots: Slots, now: number, text = ""): Prefill {
+  const dateText = slots.date_text || text;
+  const parsed = dateText ? parseDateText(dateText, now) : null;
   const start = slots.time_text ? parseTimeText(slots.time_text) ?? undefined : undefined;
   const period = start !== undefined ? periodOf(start) : slots.period ? parsePeriod(slots.period) ?? undefined : undefined;
   return {
@@ -302,8 +304,8 @@ function existingBookingMessage(event: CalendarEvent): Message {
 
 class NoServicesError extends Error {}
 
-async function askService(prefill: Prefill = {}): Promise<Message> {
-  const services = await getServices();
+async function askService(prefill: Prefill = {}, only?: Service[]): Promise<Message> {
+  const services = only ?? await getServices();
   if (services.length === 0) {
     console.error(JSON.stringify({ tag: "booking_no_services" }));
     throw new NoServicesError("no active services");
@@ -315,6 +317,48 @@ async function askService(prefill: Prefill = {}): Promise<Message> {
       data: postbackData({ a: "svc", s: name, ...prefillParams(prefill) }),
       displayText: name,
     })),
+  );
+}
+
+// รวมเวลาว่างของทุกบริการเป็นช่วง เช่น 10:00–12:00, 13:30–19:00
+function freeSpans(open: { service: Service; slots: number[] }[]): string {
+  const blocks = open
+    .flatMap(({ service, slots }) => slots.map((start) => [start, start + service.minutes]))
+    .sort((a, b) => a[0] - b[0]);
+  const spans: number[][] = [];
+  for (const [start, end] of blocks) {
+    const last = spans.at(-1);
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+    else spans.push([start, end]);
+  }
+  return spans.map(([start, end]) => `${clock(start)}–${clock(end)}`).join(", ");
+}
+
+// ลูกค้าถามคิวว่างของวันหนึ่ง: บอกช่วงที่ว่างก่อน แล้วให้เลือกเฉพาะบริการที่ยังจองวันนั้นได้
+// วันที่อยู่นอกช่วงเปิดจองถามบริการตามปกติ ขั้นหลังเลือกประเภทลูกค้าจะบอกเองว่าไม่มีคิว
+async function askServiceForDate(services: Service[], prefill: Prefill, date: string, now: number): Promise<Message> {
+  if (date < dateAt(now, 0) || date > dateAt(now, BOOKING_DAYS_AHEAD)) return askService(prefill);
+  const day = formatDate(`${date}T12:00:00${OFFSET}`);
+  const ranges = rangesFor(date, await getBookingHours());
+  const withDoctor = services.find((service) => service.needsDoctor);
+  const [events, allowed] = ranges.length > 0
+    ? await Promise.all([loadEvents(toIso(date, 0), endOfDay(date), now), withDoctor ? doctorDays(withDoctor, now) : null])
+    : [[], null];
+  const doctorIn = !allowed || allowed.has(date);
+  const open = services
+    .map((service) => ({
+      service,
+      slots: !service.needsDoctor || doctorIn ? freeSlots(date, ranges, service.minutes, events, now) : [],
+    }))
+    .filter(({ slots }) => slots.length > 0);
+
+  if (open.length === 0) {
+    return withPrefix(`${day} ไม่มีคิวว่างค่ะ`, await askService({ right: prefill.right }));
+  }
+  const missing = open.length < services.length ? "\nบริการที่ไม่อยู่ในปุ่มด้านล่าง วันนั้นคิวเต็มหรือคุณหมอไม่เข้าค่ะ" : "";
+  return withPrefix(
+    `${day} มีคิวว่างช่วง ${freeSpans(open)} น. ค่ะ${missing}`,
+    await askService(prefill, open.map(({ service }) => service)),
   );
 }
 
@@ -631,9 +675,12 @@ export async function startBooking(userId: string | undefined, text: string, slo
     const [upcoming] = await findUserEvents("lineUserId", userId, now);
     if (upcoming) return existingBookingMessage(upcoming);
 
-    const prefill = prefillFromSlots(slots, now);
-    const service = matchService(await getServices(), slots.service);
-    return service ? askRight(service, prefill) : await askService(prefill);
+    const prefill = prefillFromSlots(slots, now, text);
+    const services = await getServices();
+    const service = matchService(services, slots.service);
+    if (service) return askRight(service, prefill);
+    if (prefill.date && services.length > 0) return await askServiceForDate(services, prefill, prefill.date, now);
+    return await askService(prefill);
   } catch (err) {
     return failSilently(err, userId, text);
   }
