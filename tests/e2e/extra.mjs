@@ -43,22 +43,25 @@ export async function run(c) {
   check("reg 1 service text", r.msg?.altText === `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร 062 038 9777 ได้เลยค่ะ 🦷`, r.msg?.altText);
   const bigButtons = r.msg?.contents?.footer?.contents?.map((b) => b.action) ?? [];
   check("reg 1 card only, no quick reply", r.msg?.type === "flex" && !r.msg.quickReply && bigButtons.length === 4, JSON.stringify(bigButtons));
+  // order chosen by the clinic: service -> date -> period -> time -> rights -> name+phone -> visit (only without DN)
   r = await pb(items(r.msg).find((a) => a.label === "ขูดหินปูน").data, c.user(U));
-  check("reg 2 right text", r.msg?.text === "ใช้สิทธิการรักษาแบบไหนคะ");
-  r = await pb(items(r.msg).find((a) => a.label === "สปสช (สิทธิบัตรทอง)").data, c.user(U));
-  check("reg 3 visit text", r.msg?.text === "เคยมาที่คลินิกแล้วหรือมาครั้งแรกคะ");
-  r = await pb(items(r.msg).find((a) => a.label === "เคยมาแล้ว").data, c.user(U));
-  check("reg 4 date text", r.msg?.text === "ต้องการนัดวันไหนคะ");
+  check("reg 2 date text", r.msg?.text === "ต้องการนัดวันไหนคะ", r.msg?.text);
   const dateBtn = items(r.msg).find((a) => new URLSearchParams(a.data).get("d") === target);
   r = await pb(dateBtn.data, c.user(U));
-  check("reg 5 period text", r.msg?.text?.endsWith(" สะดวกช่วงไหนคะ"), r.msg?.text);
+  check("reg 3 period text", r.msg?.text?.endsWith(" สะดวกช่วงไหนคะ"), r.msg?.text);
   r = await pb(items(r.msg).find((a) => a.label === "ช่วงเช้า").data, c.user(U));
-  check("reg 6 time text", r.msg?.text === "ต้องการเวลาไหนคะ");
-  check("reg 6 time card: 3 per row", r.msg?.type === "flex" && r.msg.contents.footer.contents.every((row) => row.type === "box" && row.contents.length === 3));
+  check("reg 4 suggested times text", /^ช่วงเช้าวัน.+ ยังมีคิวว่างค่ะ\nแนะนำ 2 เวลานี้ค่ะ หากไม่สะดวก กดดูเวลาอื่นได้เลยนะคะ$/.test(r.msg?.text ?? "") && items(r.msg).length === 3 && items(r.msg).at(-1).label === "ดูเวลาอื่น", r.msg?.text);
+  r = await pb(items(r.msg).find((a) => a.label === "ดูเวลาอื่น").data, c.user(U));
+  check("reg 4b all times text", r.msg?.text === "ต้องการเวลาไหนคะ");
+  check("reg 4b time card: 3 per row", r.msg?.type === "flex" && r.msg.contents.footer.contents.every((row) => row.type === "box" && row.contents.length === 3));
   r = await pb(items(r.msg).find((a) => a.label === "10:45").data, c.user(U));
-  check("reg 7 hold text", r.msg?.text?.startsWith("เจ้าหน้าที่จะบันทึกการนัดหมาย วัน") && r.msg.text.includes("เวลา 10:45 น. นะคะ กรุณาพิมพ์ชื่อ-นามสกุล และเบอร์โทร") && r.msg.text.includes("0812345678\nหากไม่ต้องการ"), r.msg?.text);
-  check("reg no admin push during steps 1-7", adminPushes().length === a0);
+  check("reg 5 hold + rights text", /^กันคิววัน.+ เวลา 10:45 น\. ไว้ให้แล้วค่ะ\nใช้สิทธิการรักษาแบบไหนคะ$/.test(r.msg?.text ?? ""), r.msg?.text);
+  r = await pb(items(r.msg).find((a) => a.label === "สปสช (สิทธิบัตรทอง)").data, c.user(U));
+  check("reg 6 name text", r.msg?.text?.startsWith("เจ้าหน้าที่จะบันทึกการนัดหมาย วัน") && r.msg.text.includes("เวลา 10:45 น. นะคะ กรุณาพิมพ์ชื่อ-นามสกุล และเบอร์โทร") && r.msg.text.includes("0812345678\nหากไม่ต้องการ"), r.msg?.text);
   r = await text("ทดสอบ ระบบ 0800000000", U);
+  check("reg 7 visit text (not in patient list)", r.msg?.text === "เคยมาที่คลินิกแล้วหรือมาครั้งแรกคะ", r.msg?.text);
+  check("reg no admin push during steps 1-7", adminPushes().length === a0);
+  r = await pb(items(r.msg).find((a) => a.label === "เคยมาแล้ว").data, c.user(U));
   check("reg 8 request text", /^ส่งคำขอนัดขูดหินปูน .+ เวลา 10:45 น\. แล้วค่ะ แอดมินจะยืนยันนัดให้อีกครั้งนะคะ 🙏$/.test(r.msg?.text ?? ""), r.msg?.text);
   const card = lastAdmin();
   check("reg 8 admin card", card?.type === "flex" && JSON.stringify(card).includes("ทดสอบ ระบบ 0800000000"));
@@ -181,20 +184,14 @@ export async function run(c) {
   const be = `${d}/${m}/${(y + 543) % 100}`;
   plan.set("pre1", cls("booking", { slots: { service: "ขูดหินปูน", coverage: "สปสช", date_text: be, time_text: "11.00" } }));
   r = await text("pre1", "Upre");
-  check("prefill skips service + right", r.msg?.text === "เคยมาที่คลินิกแล้วหรือมาครั้งแรกคะ", r.msg?.text);
-  const visitData = new URLSearchParams(items(r.msg)[1].data);
-  check("prefill carried in postback", visitData.get("r") === "gold" && visitData.get("pd") === target && visitData.get("pt") === "660" && items(r.msg).every((a) => a.data.length <= 300));
-  r = await pb(items(r.msg)[1].data, c.user("Upre"));
   const preEv = [...events.values()].find((e) => e.extendedProperties?.private?.lineUserId === "Upre" && e.status !== "cancelled");
-  check("prefill date + time -> hold directly", r.msg?.text?.startsWith("เจ้าหน้าที่จะบันทึกการนัดหมาย") && preEv?.start.dateTime === `${target}T11:00:00+07:00`, r.msg?.text);
+  check("prefill service + coverage + date + time -> held at once, asks name", r.msg?.text?.startsWith("เจ้าหน้าที่จะบันทึกการนัดหมาย") && preEv?.start.dateTime === `${target}T11:00:00+07:00` && preEv.extendedProperties.private.right === "gold", r.msg?.text);
   await text("ยกเลิก", "Upre");
 
   plan.set("pre2", cls("booking", { slots: { service: "ขูด หินปูน", date_text: be, period: "บ่าย" } }));
   r = await text("pre2", "Upre2");
-  check("prefill without coverage asks right", r.msg?.text === "ใช้สิทธิการรักษาแบบไหนคะ");
-  r = await pb(items(r.msg)[2].data, c.user("Upre2"));
-  r = await pb(items(r.msg)[0].data, c.user("Upre2"));
-  check("prefill period -> afternoon times", r.msg?.text === "ต้องการเวลาไหนคะ" && items(r.msg).every((a) => a.label >= "12:00" && a.label < "16:00"), items(r.msg).map((a) => a.label).join());
+  const pmTimes = items(r.msg).filter((a) => a.label !== "ดูเวลาอื่น");
+  check("prefill date + period -> afternoon suggestions", r.msg?.text?.startsWith("ช่วงบ่ายวัน") && pmTimes.length === 2 && pmTimes.every((a) => a.label >= "12:00" && a.label < "16:00") && items(r.msg).every((a) => a.data.length <= 300), items(r.msg).map((a) => a.label).join());
 
   plan.set("pre3", cls("booking", { slots: { service: "ไม่มีบริการนี้", date_text: "วันจันทร์20" } }));
   r = await text("pre3", "Upre3");
@@ -208,9 +205,7 @@ export async function run(c) {
   check("free day -> times then service question", /^วัน.+ มีคิวว่างช่วง \d\d:\d\d–\d\d:\d\d(, \d\d:\d\d–\d\d:\d\d)* น\. ค่ะ$/.test(lines[0] ?? "") && lines.at(-1) === SERVICE_TEXT, r.msg?.altText);
   check("free day -> buttons carry the date", items(r.msg).length > 0 && items(r.msg).filter((a) => a.type === "postback").every((a) => new URLSearchParams(a.data).get("pd") === target), items(r.msg).map((a) => a.data).join(" | "));
   r = await pb(items(r.msg).find((a) => a.label === "ขูดหินปูน").data, c.user("Ufree1"));
-  r = await pb(items(r.msg)[0].data, c.user("Ufree1"));
-  r = await pb(items(r.msg)[0].data, c.user("Ufree1"));
-  check("free day -> after right/visit goes straight to periods", r.msg?.text?.endsWith(" สะดวกช่วงไหนคะ"), r.msg?.text);
+  check("free day -> service goes straight to periods of that day", r.msg?.text?.endsWith(" สะดวกช่วงไหนคะ"), r.msg?.text);
 
   const [ty, tm, td] = c.closedTue.split("-").map(Number);
   plan.set("free2", cls("booking", { slots: { date_text: `${td}/${tm}/${(ty + 543) % 100}` } }));

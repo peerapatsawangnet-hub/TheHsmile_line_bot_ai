@@ -287,19 +287,16 @@ check("services card: big buttons only, no quick reply", sameButtons(r.msg) && c
   check("other service button -> handoff card + admin sees why", other.msg?.altText && other.msg.type === "flex" && JSON.stringify(notice ?? "").includes("ขอแอดมิน (นัดบริการอื่น)"), JSON.stringify(notice).slice(0, 160));
 }
 
-// self-pay only service: rights step skipped, told why, right fixed to ชำระเอง
+// self-pay only service: told at once, rights never asked, right fixed to ชำระเอง on every button
 r = await pb(acts.find((a) => a.label === "จัดฟัน").data);
-check("self-pay service -> note + visit question", r.msg?.text === "บริการจัดฟันชำระเองค่ะ ใช้สิทธิบัตรทองหรือประกันสังคมไม่ได้นะคะ\nเคยมาที่คลินิกแล้วหรือมาครั้งแรกคะ" && items(r.msg).every((a) => new URLSearchParams(a.data).get("r") === "self"), r.msg?.text);
+check("self-pay service -> note + date question", r.msg?.text === "บริการจัดฟันชำระเองค่ะ ใช้สิทธิบัตรทองหรือประกันสังคมไม่ได้นะคะ\nต้องการนัดวันไหนคะ" && items(r.msg).every((a) => new URLSearchParams(a.data).get("r") === "self"), r.msg?.text);
+// a card from the old flow still in the chat: lands in the new order, gold dropped
 r = await pb("a=visit&s=จัดฟัน&r=gold&v=old");
-check("self-pay service + gold postback -> back to note, no gold", r.msg?.text?.startsWith("บริการจัดฟันชำระเองค่ะ") && items(r.msg).every((a) => !a.data.includes("r=gold")), r.msg?.text);
+check("old visit card + self-pay -> note + dates, no gold", r.msg?.text?.startsWith("บริการจัดฟันชำระเองค่ะ") && items(r.msg).every((a) => !a.data.includes("r=gold")), r.msg?.text);
+// new order: service -> date -> period -> time; rights and visit come after the hold
 r = await pb(acts[0].data); acts = items(r.msg);
-check("service -> 3 rights", acts.map((a) => a.label).join() === "สปสช (สิทธิบัตรทอง),ประกันสังคม,ชำระเอง", acts.map((a) => a.label).join());
-check("rights card: big buttons only, no quick reply", sameButtons(r.msg));
+check("service -> date card first", r.msg?.text === "ต้องการนัดวันไหนคะ" && acts.every((a) => !/[?&][rv]=/.test(`?${a.data}`)), r.msg?.text);
 check("postback data within LINE limit", acts.every((a) => a.data.length <= 300), acts[0].data);
-r = await pb(acts[0].data); acts = items(r.msg);
-check("right -> new/returning", acts.map((a) => a.label).join() === "เคยมาแล้ว,มาครั้งแรก");
-check("visit card: big buttons only, no quick reply", sameButtons(r.msg));
-r = await pb(acts[1].data); acts = items(r.msg);
 check("date buttons <= 13, labels <= 20", acts.length > 0 && acts.length <= 13 && acts.every((a) => a.label.length <= 20), acts.map((a) => a.label).join(" | "));
 check("date card: 2 per row, no quick reply", sameButtons(r.msg) && r.msg.contents.footer.contents.every((row) => row.type === "box" && row.contents.length === 2), JSON.stringify(r.msg?.contents?.footer?.contents?.[0]));
 check("date card: main buttons blue", r.msg.contents.footer.contents[0].contents[0].color === "#2563EB");
@@ -322,18 +319,22 @@ check("normal Wednesday not offered", !dates.some((d) => weekdayOf(d) === 3 && d
 check("special closed day not offered", !dates.includes(closedTue), closedTue);
 
 const q = (o) => Object.entries(o).map(([k, v]) => `${k}=${v}`).join("&");
-const b15 = { s: "ขูดหินปูน", r: "gold", v: "new" };
-const b60 = { s: "รักษาราก", r: "sso", v: "old" };
+// customers who said their coverage up front carry it (r) and skip the rights card later
+const b15 = { s: "ขูดหินปูน", r: "gold" };
+const b60 = { s: "รักษาราก", r: "sso" };
 
 r = await pb(q({ a: "date", ...b15, d: wed }));
 check("special day has morning only", items(r.msg).map((a) => a.label).join() === "ช่วงเช้า");
 r = await pb(q({ a: "date", ...b15, d: target })); acts = items(r.msg);
 check("period buttons", acts.map((a) => a.label).join() === "ช่วงเช้า,ช่วงบ่าย,ช่วงเย็น");
 r = await pb(acts[0].data); acts = items(r.msg);
-check("morning every 15 min, none in lunch", acts.map((a) => a.label).join() === "10:00,10:15,10:30,10:45,11:00,11:15,11:30,11:45", acts.map((a) => a.label).join());
-r = await pb(q({ a: "period", ...b60, d: target, p: "am" }));
+check("period -> 2 earliest times + ดูเวลาอื่น", r.msg?.text?.startsWith("ช่วงเช้าวัน") && r.msg.text.endsWith("ยังมีคิวว่างค่ะ\nแนะนำ 2 เวลานี้ค่ะ หากไม่สะดวก กดดูเวลาอื่นได้เลยนะคะ") && acts.map((a) => a.label).join() === "10:00,10:15,ดูเวลาอื่น", `${r.msg?.text} | ${acts.map((a) => a.label).join()}`);
+check("ดูเวลาอื่น is grey", r.msg?.contents?.footer?.contents?.at(-1)?.contents?.[0]?.style === "secondary");
+r = await pb(acts.at(-1).data); acts = items(r.msg);
+check("ดูเวลาอื่น -> every free time", r.msg?.text === "ต้องการเวลาไหนคะ" && acts.map((a) => a.label).join() === "10:00,10:15,10:30,10:45,11:00,11:15,11:30,11:45", acts.map((a) => a.label).join());
+r = await pb(q({ a: "times", ...b60, d: target, p: "am" }));
 check("60 min must end before lunch", items(r.msg).map((a) => a.label).join() === "10:00,10:15,10:30,10:45,11:00", items(r.msg).map((a) => a.label).join());
-r = await pb(q({ a: "period", ...b15, d: target, p: "eve" }));
+r = await pb(q({ a: "times", ...b15, d: target, p: "eve" }));
 check("15 min can start 18:45, within 13 buttons", items(r.msg).at(-1).label === "18:45" && items(r.msg).length <= 13, String(items(r.msg).length));
 
 // capacity from existing appointments
@@ -341,24 +342,30 @@ seed(target, "13:00", 15); seed(target, "13:15", 15);
 seed(target, "14:00", 15);
 seed(target, "15:00", 15, { transparency: "transparent" }); seed(target, "15:00", 15, { transparency: "transparent" });
 events.set("allday", { id: "allday", status: "confirmed", start: { date: target }, end: { date: target } });
-r = await pb(q({ a: "period", ...b15, d: target, p: "pm" }));
+r = await pb(q({ a: "times", ...b15, d: target, p: "pm" }));
 let labels = items(r.msg).map((a) => a.label);
 check("occupied times are not offered", !labels.includes("13:00") && !labels.includes("13:15") && !labels.includes("14:00"), labels.join(","));
 check("afternoon within 13 buttons", items(r.msg).length <= 13, String(items(r.msg).length));
 check("next free quarter offered after an appointment", labels.includes("14:15"));
 check("free (transparent) events ignored", labels.includes("15:00"));
-r = await pb(q({ a: "period", ...b60, d: target, p: "pm" }));
+r = await pb(q({ a: "times", ...b60, d: target, p: "pm" }));
 labels = items(r.msg).map((a) => a.label);
 check("60 min blocked if any part overlaps", !labels.includes("13:00") && !labels.includes("13:30") && labels.includes("14:15"), labels.join(","));
 check("list asks for enough rows and no titles", lastListQuery.includes("maxResults=2500") && !decodeURIComponent(lastListQuery).includes("summary"), decodeURIComponent(lastListQuery).slice(0, 110));
 
 // hold -> details -> admin
 const slot = (o, t) => q({ a: "slot", ...o, d: target, p: "pm", t: String(t) });
-r = await pb(slot(b15, 14 * 60 + 15));
-check("slot -> asks name + phone", r.msg?.text?.includes("ชื่อ-นามสกุล") && r.msg.text.startsWith("เจ้าหน้าที่จะบันทึกการนัดหมาย"), r.msg?.text);
+r = await pb(slot({ s: "ขูดหินปูน" }, 14 * 60 + 15));
+check("slot -> queue held, then rights", /^กันคิววัน.+ เวลา 14:15 น\. ไว้ให้แล้วค่ะ\nใช้สิทธิการรักษาแบบไหนคะ$/.test(r.msg?.text ?? "") && items(r.msg).map((a) => a.label).join() === "สปสช (สิทธิบัตรทอง),ประกันสังคม,ชำระเอง", r.msg?.text);
 let ev = [...events.values()].find((e) => e.extendedProperties?.private?.lineUserId === "Usecret1");
 check("request is gray + tentative at time", ev.status === "tentative" && ev.colorId === "8" && ev.start.dateTime === `${target}T14:15:00+07:00`);
 check("hold has correct end", Date.parse(ev.end.dateTime) - Date.parse(ev.start.dateTime) === 900000);
+const rightBtn = items(r.msg)[0];
+check("rights buttons point at the held queue only", rightBtn.data === `a=hr&e=${ev.id}&r=gold`, rightBtn.data);
+r = await pb(rightBtn.data, user("Ustranger"));
+check("someone else's rights tap -> no change", r.msg?.text?.startsWith("คิวที่กันไว้หมดเวลาแล้วค่ะ") && !events.get(ev.id).extendedProperties.private.right, r.msg?.text);
+r = await pb(rightBtn.data);
+check("rights -> asks name + phone", r.msg?.text?.includes("ชื่อ-นามสกุล") && r.msg.text.startsWith("เจ้าหน้าที่จะบันทึกการนัดหมาย") && events.get(ev.id).extendedProperties.private.right === "gold", r.msg?.text);
 const pushBefore = pushes.length;
 
 r = await text("ราคาเท่าไหร่");
@@ -366,10 +373,13 @@ check("no phone -> asks again", r.msg?.text?.includes("รบกวนพิม�
 r = await text("เบอร์ 0812345678");
 check("no name -> asks again", r.msg?.text?.includes("รบกวนพิมพ์"));
 r = await text("สมชาย ใจดี 081-234-5678");
+check("not in patient list -> asks new or returning", r.msg?.text === "เคยมาที่คลินิกแล้วหรือมาครั้งแรกคะ" && pushes.length === pushBefore, r.msg?.text);
+check("visit card is big buttons", sameButtons(r.msg) && items(r.msg).map((a) => a.label).join() === "เคยมาแล้ว,มาครั้งแรก");
+r = await pb(items(r.msg)[1].data);
 check("details -> request sent", r.msg?.text?.includes("แอดมินจะยืนยัน"), r.msg?.text);
 ev = events.get(ev.id);
 check("title matches clinic format", ev.summary === "[รอแอดมิน] สมชาย ใจดี 0812345678 ขูดหินปูน สปสช คนไข้ใหม่ ไลน์ OA", ev.summary);
-check("hold props cleared", !("awaitingDetailsFor" in ev.extendedProperties.private) && !("holdUntil" in ev.extendedProperties.private));
+check("hold props cleared", ["awaitingDetailsFor", "holdUntil", "name", "phone", "dn"].every((k) => !(k in ev.extendedProperties.private)));
 const card = pushes.at(-1);
 check("admin card shows details", card.to === "Cadmin" && JSON.stringify(card.messages[0]).includes("สมชาย ใจดี 0812345678"));
 const [okBtn] = card.messages[0].contents.footer.contents.map((c) => c.action.data);
@@ -399,10 +409,10 @@ check("customer cancels hold", events.get(held.id).status === "cancelled" && r.m
 
 r = await pb(slot(b15, 16 * 60), user("Uexpire"));
 const exp = [...events.values()].find((e) => e.extendedProperties?.private?.lineUserId === "Uexpire");
-r = await pb(q({ a: "period", ...b15, d: target, p: "eve" }), user("Uother"));
+r = await pb(q({ a: "times", ...b15, d: target, p: "eve" }), user("Uother"));
 check("active hold counts as a queue", !items(r.msg).some((a) => a.label === "16:00"));
 exp.extendedProperties.private.holdUntil = String(Date.now() - 1000);
-r = await pb(q({ a: "period", ...b15, d: target, p: "eve" }), user("Uother"));
+r = await pb(q({ a: "times", ...b15, d: target, p: "eve" }), user("Uother"));
 check("expired hold frees the queue", items(r.msg).some((a) => a.label === "16:00"));
 check("expired hold removed from calendar", events.get(exp.id).status === "cancelled");
 
@@ -433,6 +443,15 @@ check("double confirm safe", r.msg?.text?.includes("ยืนยันไปแ�
 
 r = await pb(slot(b15, 18 * 60), user("Ureject"));
 r = await text("สมหญิง ทดสอบ 0899999999", "Ureject");
+// typed coverage + details in one message: both saved, then only the visit question is left
+r = await pb(slot({ s: "ขูดหินปูน" }, 18 * 60 + 15), user("Utyped"));
+r = await text("ประกันสังคม สมใจ ทดสอบ 0811112222", "Utyped");
+const typedEv = live().find((e) => e.extendedProperties?.private?.lineUserId === "Utyped");
+check("typed coverage + details -> saved, asks visit", r.msg?.text === "เคยมาที่คลินิกแล้วหรือมาครั้งแรกคะ" && typedEv?.extendedProperties.private.right === "sso" && typedEv.extendedProperties.private.name === "สมใจ ทดสอบ", JSON.stringify(typedEv?.extendedProperties.private));
+await text("ยกเลิก", "Utyped");
+// typed answer works like the button
+r = await text("มาครั้งแรกค่ะ", "Ureject");
+check("typed มาครั้งแรก -> request sent", r.msg?.text?.includes("แอดมินจะยืนยัน") && pushes.at(-1).to === "Cadmin" && JSON.stringify(pushes.at(-1).messages[0]).includes("คนไข้ใหม่"), r.msg?.text);
 const noData = pushes.at(-1).messages[0].contents.footer.contents[1].action.data;
 const eid = new URLSearchParams(noData).get("e");
 r = await adminPb(noData);
@@ -537,12 +556,13 @@ pc2 = pushes.length;
 r = await pb(dnSlot(10 * 60), user("Udn"));
 r = await text("ทดสอบ ดีเอ็น 0870000001", "Udn");
 const dnEv = live().find((e) => e.extendedProperties?.private?.lineUserId === "Udn");
-check("matching phone + name -> DN first in title", dnEv?.summary?.startsWith("[รอแอดมิน] 680099 ทดสอบ ดีเอ็น 0870000001"), dnEv?.summary);
+check("matching phone + name -> DN first in title, returning without asking", dnEv?.summary === "[รอแอดมิน] 680099 ทดสอบ ดีเอ็น 0870000001 ขูดหินปูน สปสช เคยมาแล้ว ไลน์ OA", dnEv?.summary);
 check("customer reply has no DN", r.msg?.text?.includes("แอดมินจะยืนยัน") && !JSON.stringify(replies.at(-1)).includes("680099"), r.msg?.text);
 check("admin card has DN", JSON.stringify(pushes.slice(pc2).find((p) => p.to === "Cadmin")?.messages ?? "").includes("680099"));
 check("DN, name, phone never logged", !logs.includes("680099") && !logs.includes("0870000001") && logs.includes('"tag":"patient_lookup","found":true,"rows":2,"phoneMatches":1'));
 r = await pb(dnSlot(10 * 60 + 15), user("Udn2"));
 r = await text("คนอื่น ดีเอ็น 0870000001", "Udn2");
+r = await pb(items(r.msg).find((a) => a.label === "มาครั้งแรก").data, user("Udn2"));
 check("same phone, other name -> no DN", live().find((e) => e.extendedProperties?.private?.lineUserId === "Udn2")?.summary === "[รอแอดมิน] คนอื่น ดีเอ็น 0870000001 ขูดหินปูน สปสช คนไข้ใหม่ ไลน์ OA");
 check("patient sheet read once for all bookings (cached)", patientReads === 1, String(patientReads));
 check("all month tabs read, quoted", lastPatientRanges.join("|") === "'ตุลาคม 2569'|'พฤศจิกายน 2569'|'สรุป'", lastPatientRanges.join("|"));
@@ -619,6 +639,7 @@ if (TG) {
   tgDown = true;
   r = await pb(slot(b15, 16 * 60), user("Utgdown"));
   r = await text("ทดสอบ ระบบ 0811111111", "Utgdown");
+  r = await text("เคยมาแล้ว", "Utgdown");
   check("telegram down -> booking still saved + customer told", r.msg?.text?.includes("แอดมินจะยืนยัน") && live().some((e) => e.extendedProperties?.private?.lineUserId === "Utgdown"), r.msg?.text);
   check("telegram down -> logged with channel", logs.includes('"tag":"booking_notify_failed","channel":"telegram","status":429'));
   tgDown = false;

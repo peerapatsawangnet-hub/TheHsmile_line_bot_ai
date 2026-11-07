@@ -45,6 +45,7 @@ const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
 const MAX_QUICK_REPLIES = 13;
 const MAX_NAME_LENGTH = 100;
+const SUGGESTED_TIMES = 2;
 const PENDING_PREFIX = "[รอแอดมิน] ";
 
 const BOOKING_TRIGGERS = ["จองคิว", "จองนัด", "ขอนัด", "อยากนัด", "นัดหมอ", "นัดหมาย", "book appointment"];
@@ -213,8 +214,14 @@ function logBookingError(err: unknown): void {
 }
 
 // ค่าที่ทุกปุ่มหลังเลือกสิทธิต้องส่งต่อ x คือนัดเดิมเมื่อกำลังเลื่อนนัด
+// จองใหม่ยังไม่รู้สิทธิและประเภทคนไข้ (ถามหลังกันคิว) จึงส่งเฉพาะค่าที่มี
 function flowParams(service: Service, right: string, visit: string, replaces: string): Record<string, string> {
-  return { s: service.name, r: right, v: visit, ...(replaces ? { x: replaces } : {}) };
+  return {
+    s: service.name,
+    ...(right ? { r: right } : {}),
+    ...(visit ? { v: visit } : {}),
+    ...(replaces ? { x: replaces } : {}),
+  };
 }
 
 function withPrefix(prefix: string, message: Message): Message {
@@ -365,60 +372,68 @@ async function askServiceForDate(services: Service[], prefill: Prefill, date: st
   return askService(prefill, open.map(({ service }) => service), `${day} มีคิวว่างช่วง ${freeSpans(open)} น. ค่ะ${missing}`);
 }
 
-// บริการที่แท็บบริการตั้ง accepts_rights = FALSE ใช้ได้แค่ชำระเอง ข้ามขั้นเลือกสิทธิ
-function askRight(service: Service, prefill: Prefill = {}): Message {
+// ลำดับคำถาม (คุณหมอเลือก): บริการ → วัน → ช่วง → เวลา → สิทธิ → ชื่อ+เบอร์ → เคยมาไหม (เฉพาะคนที่ไม่พบ DN)
+// ลูกค้าเห็นเวลาว่างก่อน สิทธิไม่มีผลกับคิวจึงถามหลังกันคิวแล้ว
+// บริการที่แท็บบริการตั้ง accepts_rights = FALSE ใช้ได้แค่ชำระเอง บอกตั้งแต่ขั้นแรกและไม่ถามสิทธิ
+async function continueAfterService(service: Service, prefill: Prefill, userId: string, now: number): Promise<Message> {
   if (!service.acceptsRights) {
     return withPrefix(
       `บริการ${service.name}ชำระเองค่ะ ใช้สิทธิบัตรทองหรือประกันสังคมไม่ได้นะคะ`,
-      askVisit(service, "self", { ...prefill, right: undefined }),
+      await continueToTime(service, "self", prefill, userId, now),
     );
   }
-  if (prefill.right) return askVisit(service, prefill.right, prefill);
-  return choices(
-    "ใช้สิทธิการรักษาแบบไหนคะ",
-    Object.entries(RIGHTS).map(([code, { label }]) => ({
-      label,
-      data: postbackData({ a: "right", s: service.name, r: code, ...prefillParams(prefill) }),
-      displayText: label,
-    })),
-  );
-}
-
-function askVisit(service: Service, right: string, prefill: Prefill = {}): Message {
-  return choices(
-    "เคยมาที่คลินิกแล้วหรือมาครั้งแรกคะ",
-    Object.entries(VISITS).map(([code, { label }]) => ({
-      label,
-      data: postbackData({ a: "visit", s: service.name, r: right, v: code, ...prefillParams(prefill) }),
-      displayText: label,
-    })),
-  );
+  return continueToTime(service, prefill.right ?? "", prefill, userId, now);
 }
 
 // ข้ามขั้นวัน ช่วง และเวลาที่ลูกค้าบอกมาแล้ว ถ้าวันหรือเวลานั้นไม่ว่างให้เลือกใหม่ตามปกติ
-async function continueAfterVisit(
+async function continueToTime(
   service: Service,
   right: string,
-  visit: string,
   prefill: Prefill,
   userId: string,
   now: number,
 ): Promise<Message> {
   const { date, period, start } = prefill;
   const inRange = date && date >= dateAt(now, 0) && date <= dateAt(now, BOOKING_DAYS_AHEAD);
-  if (!date) return askDate(service, right, visit, now);
+  if (!date) return askDate(service, right, "", now);
   const slots = inRange ? await slotsForDate(service, date, now) : [];
   if (slots.length === 0) {
     return withPrefix(
       `${formatDate(`${date}T12:00:00${OFFSET}`)} ไม่มีคิวว่างค่ะ`,
-      await askDate(service, right, visit, now),
+      await askDate(service, right, "", now),
     );
   }
   if (start !== undefined && slots.includes(start)) {
-    return holdSlot(service, right, visit, date, periodOf(start), start, userId, now);
+    return holdSlot(service, right, date, periodOf(start), start, userId, now);
   }
-  if (period) return askTime(service, right, visit, date, period, now);
-  return askPeriod(service, right, visit, date, now);
+  if (period) return askTime(service, right, "", date, period, now);
+  return askPeriod(service, right, "", date, now);
+}
+
+// ถามหลังกันคิวแล้ว ปุ่มอ้างถึงคิวที่กันไว้ (e) จึงไม่ต้องพกข้อมูลขั้นก่อนหน้า
+function rightsCard(eventId: string, when: string): Message {
+  return withPrefix(
+    `กันคิว${when} ไว้ให้แล้วค่ะ`,
+    choices(
+      "ใช้สิทธิการรักษาแบบไหนคะ",
+      Object.entries(RIGHTS).map(([code, { label }]) => ({
+        label,
+        data: postbackData({ a: "hr", e: eventId, r: code }),
+        displayText: label,
+      })),
+    ),
+  );
+}
+
+function visitCard(eventId: string): Message {
+  return choices(
+    "เคยมาที่คลินิกแล้วหรือมาครั้งแรกคะ",
+    Object.entries(VISITS).map(([code, { label }]) => ({
+      label,
+      data: postbackData({ a: "hv", e: eventId, v: code }),
+      displayText: label,
+    })),
+  );
 }
 
 // วันว่างมีมากกว่าปุ่ม quick reply จึงแบ่งหน้า from คือวันแรกของหน้านี้
@@ -513,21 +528,38 @@ async function askTime(
   period: string,
   now: number,
   replaces = "",
+  all = false,
 ): Promise<Message> {
-  const { from, to } = PERIODS[period] ?? PERIODS.am;
+  const { from, to, label } = PERIODS[period] ?? PERIODS.am;
   const slots = (await slotsForDate(service, date, now)).filter((start) => start >= from && start < to);
   if (slots.length === 0) {
     return withPrefix("ช่วงนี้คิวเต็มแล้วค่ะ", await askPeriod(service, right, visit, date, now, replaces));
   }
 
-  return choices(
-    "ต้องการเวลาไหนคะ",
-    slots.map((start) => ({
-      label: clock(start),
-      data: postbackData({ a: "slot", ...flowParams(service, right, visit, replaces), d: date, p: period, t: String(start) }),
-      displayText: `${clock(start)} น.`,
-    })),
-    3,
+  const params = flowParams(service, right, visit, replaces);
+  const buttons = (times: number[]): ChoiceButton[] => times.map((start) => ({
+    label: clock(start),
+    data: postbackData({ a: "slot", ...params, d: date, p: period, t: String(start) }),
+    displayText: `${clock(start)} น.`,
+  }));
+  if (all || slots.length <= SUGGESTED_TIMES) return choices("ต้องการเวลาไหนคะ", buttons(slots), 3);
+
+  // เสนอเวลาว่างที่เร็วที่สุดก่อน ช่วยเติมคิวต้นช่วงและให้ลูกค้าตัดสินใจเร็ว
+  return withPrefix(
+    `${label}${formatDate(`${date}T12:00:00${OFFSET}`)} ยังมีคิวว่างค่ะ`,
+    choices(
+      `แนะนำ ${SUGGESTED_TIMES} เวลานี้ค่ะ หากไม่สะดวก กดดูเวลาอื่นได้เลยนะคะ`,
+      [
+        ...buttons(slots.slice(0, SUGGESTED_TIMES)),
+        {
+          label: "ดูเวลาอื่น",
+          data: postbackData({ a: "times", ...params, d: date, p: period }),
+          displayText: "ดูเวลาอื่น",
+          secondary: true,
+        },
+      ],
+      2,
+    ),
   );
 }
 
@@ -547,8 +579,7 @@ async function lostRace(event: CalendarEvent, startMs: number, minutes: number, 
 
 async function holdSlot(
   service: Service,
-  right: string,
-  visit: string,
+  chosenRight: string,
   date: string,
   period: string,
   start: number,
@@ -558,9 +589,11 @@ async function holdSlot(
   const [upcoming] = await findUserEvents("lineUserId", userId, now);
   if (upcoming) return existingBookingMessage(upcoming);
 
+  // ปุ่มเก่าหรือปุ่มที่แก้เอง: บริการที่ชำระเองใช้สิทธิอื่นไม่ได้
+  const right = !service.acceptsRights ? "self" : RIGHTS[chosenRight] ? chosenRight : "";
   const slots = await slotsForDate(service, date, now);
   if (!slots.includes(start)) {
-    return withPrefix("เวลานี้คิวเต็มแล้วค่ะ", await askTime(service, right, visit, date, period, now));
+    return withPrefix("เวลานี้คิวเต็มแล้วค่ะ", await askTime(service, right, "", date, period, now));
   }
 
   const startIso = toIso(date, start);
@@ -578,21 +611,84 @@ async function holdSlot(
         awaitingDetailsFor: userId,
         holdUntil: String(now + BOOKING_HOLD_MINUTES * MINUTE_MS),
         service: service.name,
-        right,
-        visit,
+        ...(right ? { right } : {}),
       },
     },
   });
 
   if (await lostRace(event, startMs, service.minutes, now)) {
     await deleteEvent(event.id);
-    return withPrefix("เวลานี้คิวเต็มแล้วค่ะ", await askTime(service, right, visit, date, period, now));
+    return withPrefix("เวลานี้คิวเต็มแล้วค่ะ", await askTime(service, right, "", date, period, now));
   }
 
+  return nextHoldStep(event);
+}
+
+type PrivateProps = Record<string, string | null>;
+
+// รวมค่าที่เพิ่ง patch เข้ากับคิวที่ถืออยู่ในมือ ไม่ต้องอ่านปฏิทินซ้ำ (null คือลบค่า)
+function withPrivate(event: CalendarEvent, extra: PrivateProps): CalendarEvent {
+  const merged = { ...(event.extendedProperties?.private ?? {}) } as Record<string, string | null>;
+  for (const [key, value] of Object.entries(extra)) {
+    if (value === null) delete merged[key];
+    else merged[key] = value;
+  }
+  return { ...event, extendedProperties: { ...event.extendedProperties, private: merged } };
+}
+
+async function updateHold(event: CalendarEvent, extra: PrivateProps): Promise<CalendarEvent> {
+  await patchEvent(event.id, { extendedProperties: { private: extra } });
+  return withPrivate(event, extra);
+}
+
+function detailsPrompt(when: string): Message {
   return {
     type: "text",
-    text: `เจ้าหน้าที่จะบันทึกการนัดหมาย ${formatWhen(startIso)} นะคะ กรุณาพิมพ์ชื่อ-นามสกุล และเบอร์โทรของผู้เข้ารับการรักษาในข้อความเดียว เช่น สมชาย ใจดี 0812345678\nหากไม่ต้องการจองแล้ว พิมพ์ "ยกเลิก" ได้เลยค่ะ`,
+    text: `เจ้าหน้าที่จะบันทึกการนัดหมาย ${when} นะคะ กรุณาพิมพ์ชื่อ-นามสกุล และเบอร์โทรของผู้เข้ารับการรักษาในข้อความเดียว เช่น สมชาย ใจดี 0812345678\nหากไม่ต้องการจองแล้ว พิมพ์ "ยกเลิก" ได้เลยค่ะ`,
   };
+}
+
+// ขั้นที่ยังขาดของคิวที่กันไว้ ตามลำดับ: สิทธิ → ชื่อและเบอร์ → เคยมาไหม ครบแล้วส่งคำขอให้แอดมิน
+async function nextHoldStep(event: CalendarEvent): Promise<Message> {
+  const props = event.extendedProperties?.private ?? {};
+  const when = formatWhen(event.start?.dateTime ?? "");
+  if (!RIGHTS[props.right ?? ""]) return rightsCard(event.id, when);
+  if (!props.name || !props.phone) return detailsPrompt(when);
+  if (!VISITS[props.visit ?? ""]) return visitCard(event.id);
+  return completeBooking(event);
+}
+
+// เจอ DN ในทะเบียนแปลว่าเคยมาแล้ว ไม่ต้องถาม ไม่เจอ (เบอร์เปลี่ยน ทะเบียนไม่ครบ) ค่อยถามลูกค้า
+async function saveDetails(event: CalendarEvent, details: { name: string; phone: string }): Promise<CalendarEvent> {
+  const dn = await findDn(details.name, details.phone);
+  return updateHold(event, { name: details.name, phone: details.phone, ...(dn ? { dn, visit: "old" } : {}) });
+}
+
+function coverageIn(text: string): string | undefined {
+  if (/บัตรทอง|สปสช|30\s*บาท/.test(text)) return "gold";
+  if (/ประกันสังคม/.test(text)) return "sso";
+  if (/ชำระเอง|จ่ายเอง/.test(text)) return "self";
+  return undefined;
+}
+
+function visitIn(text: string): string | undefined {
+  if (/ครั้งแรก|ไม่เคย|คนไข้ใหม่/.test(text)) return "new";
+  if (/เคยมา|คนไข้เก่า/.test(text)) return "old";
+  return undefined;
+}
+
+// ปุ่มบนการ์ดสิทธิและการ์ดเคยมาไหม ใช้ได้เฉพาะเจ้าของคิวที่ยังไม่หมดเวลา
+async function answerHold(action: string, params: URLSearchParams, userId: string): Promise<Message> {
+  const event = await getEvent(params.get("e") ?? "");
+  const props = event?.extendedProperties?.private ?? {};
+  if (!event || event.status === "cancelled" || props.awaitingDetailsFor !== userId || isExpiredHold(event, Date.now())) {
+    return { type: "text", text: `คิวที่กันไว้หมดเวลาแล้วค่ะ พิมพ์ "จองคิว" เพื่อเลือกเวลาใหม่ได้เลยนะคะ` };
+  }
+  const right = params.get("r") ?? "";
+  const visit = params.get("v") ?? "";
+  if (action === "hr" && RIGHTS[right]) return nextHoldStep(await updateHold(event, { right }));
+  if (action === "hv" && VISITS[visit]) return nextHoldStep(await updateHold(event, { visit }));
+  return nextHoldStep(event);
 }
 
 // การ์ดคำขอในกลุ่มแอดมิน หน้าตาเดียวกันทั้ง Telegram และ LINE
@@ -615,22 +711,29 @@ function parseDetails(text: string): { name: string; phone: string } | null {
   const match = clean.match(/(?<!\d)0\d(?:[ -]?\d){7,8}(?!\d)/);
   if (!match) return null;
   const phone = match[0].replace(/\D/g, "");
-  const name = clean.replace(match[0], " ").replace(/เบอร์|ชื่อ/g, " ").replace(/\s+/g, " ").trim().slice(0, MAX_NAME_LENGTH);
+  // ลูกค้าอาจพิมพ์สิทธิมาพร้อมชื่อ เช่น "ประกันสังคม สมใจ ทดสอบ 08…" (coverageIn อ่านสิทธิแยกไว้แล้ว)
+  const name = clean
+    .replace(match[0], " ")
+    .replace(/เบอร์|ชื่อ|สิทธิ(?:บัตรทอง)?|บัตรทอง|สปสช\.?|ประกันสังคม|ชำระเอง|จ่ายเอง/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_NAME_LENGTH);
   return name ? { name, phone } : null;
 }
 
-async function completeBooking(event: CalendarEvent, details: { name: string; phone: string }): Promise<Message> {
+async function completeBooking(event: CalendarEvent): Promise<Message> {
   const props = event.extendedProperties?.private ?? {};
   const service = props.service ?? "";
   const right = RIGHTS[props.right ?? ""]?.summary ?? "";
   const visit = VISITS[props.visit ?? ""]?.summary ?? "";
   // DN ช่วยให้หาชาร์ตได้เร็ว ขึ้นเฉพาะในปฏิทินและกลุ่มแอดมิน ไม่ส่งให้ลูกค้า
-  const dn = await findDn(details.name, details.phone);
-  const summary = `${dn ? `${dn} ` : ""}${details.name} ${details.phone} ${service} ${right} ${visit} ไลน์ OA`;
+  const dn = props.dn ?? "";
+  const summary = `${dn ? `${dn} ` : ""}${props.name} ${props.phone} ${service} ${right} ${visit} ไลน์ OA`;
 
+  // ชื่อและเบอร์อยู่ในชื่อนัดแล้ว ไม่ต้องเก็บซ้ำในค่าส่วนตัว
   await patchEvent(event.id, {
     summary: `${PENDING_PREFIX}${summary}`,
-    extendedProperties: { private: { awaitingDetailsFor: null, holdUntil: null } },
+    extendedProperties: { private: { awaitingDetailsFor: null, holdUntil: null, name: null, phone: null, dn: null } },
   });
 
   const when = formatWhen(event.start?.dateTime ?? "");
@@ -656,14 +759,22 @@ export async function handleBookingDetails(userId: string | undefined, text: str
       return { type: "text", text: "ยกเลิกการจองคิวแล้วค่ะ 🙏" };
     }
 
-    const details = parseDetails(text);
-    if (!details) {
-      return {
-        type: "text",
-        text: `รบกวนพิมพ์ชื่อ-นามสกุล และเบอร์โทรในข้อความเดียวนะคะ เช่น สมชาย ใจดี 0812345678 หากไม่ต้องการจองแล้ว พิมพ์ "ยกเลิก" ได้เลยค่ะ`,
-      };
-    }
-    return await completeBooking(event, details);
+    // ลูกค้าพิมพ์คำตอบแทนการกดปุ่มได้ทุกขั้น เช่น "ประกันสังคม" หรือ "มาครั้งแรก"
+    const props = event.extendedProperties?.private ?? {};
+    const coverage = coverageIn(text);
+    const details = props.name ? null : parseDetails(text);
+    const visit = props.name ? visitIn(text) : undefined;
+    let current = event;
+    if (coverage && !RIGHTS[props.right ?? ""]) current = await updateHold(current, { right: coverage });
+    if (details) current = await saveDetails(current, details);
+    if (visit) current = await updateHold(current, { visit });
+    if (current !== event) return await nextHoldStep(current);
+
+    if (!RIGHTS[props.right ?? ""] || props.name) return await nextHoldStep(event);
+    return {
+      type: "text",
+      text: `รบกวนพิมพ์ชื่อ-นามสกุล และเบอร์โทรในข้อความเดียวนะคะ เช่น สมชาย ใจดี 0812345678 หากไม่ต้องการจองแล้ว พิมพ์ "ยกเลิก" ได้เลยค่ะ`,
+    };
   } catch (err) {
     logBookingError(err);
     return null;
@@ -690,7 +801,7 @@ export async function startBooking(userId: string | undefined, text: string, slo
     const prefill = prefillFromSlots(slots, now, text);
     const services = await getServices();
     const service = matchService(services, slots.service);
-    if (service) return askRight(service, prefill);
+    if (service) return await continueAfterService(service, prefill, userId, now);
     if (prefill.date && services.length > 0) return await askServiceForDate(services, prefill, prefill.date, now);
     return await askService(prefill);
   } catch (err) {
@@ -896,7 +1007,16 @@ export async function handleBookingPostback(data: string, userId: string | undef
       return failSilently(err, userId, "(กดปุ่มยกเลิกนัด)");
     }
   }
-  if (!["svc", "right", "visit", "dates", "date", "period", "slot"].includes(action ?? "")) return null;
+  if (action === "hr" || action === "hv") {
+    if (!userId) return null;
+    try {
+      return await answerHold(action, params, userId);
+    } catch (err) {
+      return failSilently(err, userId, "(กดปุ่มในขั้นตอนจองคิว)");
+    }
+  }
+  // right/visit: ปุ่มจากการ์ดแบบเดิมที่ยังค้างในแชต พาเข้าลำดับใหม่
+  if (!["svc", "right", "visit", "dates", "date", "period", "times", "slot"].includes(action ?? "")) return null;
 
   try {
     if (!userId) return null;
@@ -904,18 +1024,14 @@ export async function handleBookingPostback(data: string, userId: string | undef
     const prefill = prefillFrom(params);
     const service = (await getServices()).find(({ name }) => name === params.get("s"));
     if (!service) return await askService(prefill);
-    if (action === "svc") return askRight(service, prefill);
+    const right = RIGHTS[params.get("r") ?? ""] ? params.get("r") ?? "" : "";
+    if (action === "svc" || action === "right" || action === "visit") {
+      return await continueAfterService(service, { ...prefill, right: right || prefill.right }, userId, now);
+    }
 
-    const right = params.get("r") ?? "";
-    // ปุ่มเก่าหรือปุ่มที่แก้เอง: สิทธิที่บริการนี้ใช้ไม่ได้ ให้กลับไปขั้นสิทธิ เลื่อนนัดใช้สิทธิของนัดเดิม
-    const rightAllowed = service.acceptsRights || right === "self" || params.has("x");
-    if (!RIGHTS[right] || !rightAllowed) return askRight(service, prefill);
-    if (action === "right") return askVisit(service, right, prefill);
-
-    const visit = params.get("v") ?? "";
-    if (!VISITS[visit]) return askVisit(service, right, prefill);
-    if (action === "visit") return await continueAfterVisit(service, right, visit, prefill, userId, now);
+    // เลื่อนนัดพกสิทธิและประเภทคนไข้ของนัดเดิม (x) จองใหม่ยังไม่มีสองค่านี้
     const replaces = params.get("x") ?? "";
+    const visit = replaces && VISITS[params.get("v") ?? ""] ? params.get("v") ?? "" : "";
     if (action === "dates") return await askDate(service, right, visit, now, params.get("f") ?? "", replaces);
 
     const date = params.get("d") ?? "";
@@ -923,9 +1039,10 @@ export async function handleBookingPostback(data: string, userId: string | undef
 
     const period = params.get("p") ?? "";
     if (action === "period") return await askTime(service, right, visit, date, period, now, replaces);
+    if (action === "times") return await askTime(service, right, visit, date, period, now, replaces, true);
     const start = Number(params.get("t"));
     if (replaces) return await requestReschedule(service, right, visit, date, period, start, userId, now, replaces);
-    return await holdSlot(service, right, visit, date, period, start, userId, now);
+    return await holdSlot(service, right, date, period, start, userId, now);
   } catch (err) {
     return failSilently(err, userId, "(กดปุ่มในขั้นตอนจองคิว)");
   }
