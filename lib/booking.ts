@@ -333,21 +333,8 @@ async function askService(prefill: Prefill = {}, only?: Service[], note = ""): P
   return note ? withPrefix(note, message) : message;
 }
 
-// รวมเวลาว่างของทุกบริการเป็นช่วง เช่น 10:00–12:00, 13:30–19:00
-function freeSpans(open: { service: Service; slots: number[] }[]): string {
-  const blocks = open
-    .flatMap(({ service, slots }) => slots.map((start) => [start, start + service.minutes]))
-    .sort((a, b) => a[0] - b[0]);
-  const spans: number[][] = [];
-  for (const [start, end] of blocks) {
-    const last = spans.at(-1);
-    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
-    else spans.push([start, end]);
-  }
-  return spans.map(([start, end]) => `${clock(start)}–${clock(end)}`).join(", ");
-}
-
-// ลูกค้าถามคิวว่างของวันหนึ่ง: บอกช่วงที่ว่างก่อน แล้วให้เลือกเฉพาะบริการที่ยังจองวันนั้นได้
+// ลูกค้าถามคิวว่างของวันหนึ่ง: ให้เลือกเฉพาะบริการที่ยังจองวันนั้นได้ แล้วไปขั้นเลือกช่วงของวันนั้นเลย
+// ไม่บอกช่วงเวลาว่างรวมบนการ์ด (เจ้าของสั่งเอาออก) เวลาที่ถูกต้องขึ้นกับบริการ จึงบอกหลังเลือกบริการ
 // วันที่อยู่นอกช่วงเปิดจองถามบริการตามปกติ ขั้นหลังเลือกประเภทลูกค้าจะบอกเองว่าไม่มีคิว
 async function askServiceForDate(services: Service[], prefill: Prefill, date: string, now: number): Promise<Message> {
   if (date < dateAt(now, 0) || date > dateAt(now, BOOKING_DAYS_AHEAD)) return askService(prefill);
@@ -368,8 +355,8 @@ async function askServiceForDate(services: Service[], prefill: Prefill, date: st
   if (open.length === 0) {
     return askService({ right: prefill.right }, undefined, `${day} ไม่มีคิวว่างค่ะ`);
   }
-  const missing = open.length < services.length ? "\nบริการที่ไม่อยู่ในปุ่มด้านล่าง วันนั้นคิวเต็มหรือคุณหมอไม่เข้าค่ะ" : "";
-  return askService(prefill, open.map(({ service }) => service), `${day} มีคิวว่างช่วง ${freeSpans(open)} น. ค่ะ${missing}`);
+  const missing = open.length < services.length ? `บริการที่ไม่อยู่ในปุ่มด้านล่าง ${day} คิวเต็มหรือคุณหมอไม่เข้าค่ะ` : "";
+  return askService(prefill, open.map(({ service }) => service), missing);
 }
 
 // ลำดับคำถาม (คุณหมอเลือก): บริการ → วัน → ช่วง → เวลา → สิทธิ → ชื่อ+เบอร์ → เคยมาไหม (เฉพาะคนที่ไม่พบ DN)

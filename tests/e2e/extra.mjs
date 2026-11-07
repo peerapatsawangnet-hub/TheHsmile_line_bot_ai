@@ -202,7 +202,7 @@ export async function run(c) {
   plan.set("free1", cls("booking", { slots: { date_text: be } }));
   r = await text("free1", "Ufree1");
   let lines = r.msg?.altText?.split("\n") ?? [];
-  check("free day -> times then service question", /^วัน.+ มีคิวว่างช่วง \d\d:\d\d–\d\d:\d\d(, \d\d:\d\d–\d\d:\d\d)* น\. ค่ะ$/.test(lines[0] ?? "") && lines.at(-1) === SERVICE_TEXT, r.msg?.altText);
+  check("free day -> no time ranges, service question", !r.msg?.altText?.includes("มีคิวว่างช่วง") && lines.at(-1) === SERVICE_TEXT, r.msg?.altText);
   check("free day -> buttons carry the date", items(r.msg).length > 0 && items(r.msg).filter((a) => a.type === "postback").every((a) => new URLSearchParams(a.data).get("pd") === target), items(r.msg).map((a) => a.data).join(" | "));
   r = await pb(items(r.msg).find((a) => a.label === "ขูดหินปูน").data, c.user("Ufree1"));
   check("free day -> service goes straight to periods of that day", r.msg?.text?.endsWith(" สะดวกช่วงไหนคะ"), r.msg?.text);
@@ -216,7 +216,9 @@ export async function run(c) {
   // Gemini left date_text empty: the day is read from the customer's own words
   plan.set("วันนี้มีคิวว่างไหมคะ", cls("booking"));
   r = await text("วันนี้มีคิวว่างไหมคะ", "Ufree3");
-  check("date read from message", /^วัน.+ (มีคิวว่างช่วง .+ น\. ค่ะ|ไม่มีคิวว่างค่ะ)\n/.test(r.msg?.altText ?? ""), r.msg?.altText);
+  const today = c.dayFromNow(0);
+  const todayBtns = items(r.msg).filter((a) => a.type === "postback");
+  check("date read from message", !r.msg?.altText?.includes("มีคิวว่างช่วง") && (r.msg?.altText?.includes(" ไม่มีคิวว่างค่ะ\n") || (todayBtns.length > 0 && todayBtns.every((a) => new URLSearchParams(a.data).get("pd") === today))), r.msg?.altText);
 
   plan.set("pre4", cls("booking", { multiple_patients: true }));
   r = await text("pre4", "Upre4");
