@@ -50,7 +50,7 @@ export async function run(c) {
   r = await pb(dateBtn.data, c.user(U));
   check("reg 3 period text", r.msg?.text?.endsWith(" สะดวกช่วงไหนคะ"), r.msg?.text);
   r = await pb(items(r.msg).find((a) => a.label === "ช่วงเช้า").data, c.user(U));
-  check("reg 4 suggested times text", /^ช่วงเช้าวัน.+ ยังมีคิวว่างค่ะ\nแนะนำ 2 เวลานี้ค่ะ หากไม่สะดวก กดดูเวลาอื่นได้เลยนะคะ$/.test(r.msg?.text ?? "") && items(r.msg).length === 3 && items(r.msg).at(-1).label === "ดูเวลาอื่น", r.msg?.text);
+  check("reg 4 suggested times text", /^ช่วงเช้าวัน.+ ยังมีคิวว่างค่ะ\nแนะนำ 2 เวลานี้ค่ะ หากไม่สะดวก กดดูเวลาอื่นได้เลยนะคะ$/.test(r.msg?.text ?? "") && items(r.msg).map((a) => a.label).slice(2).join() === "ดูเวลาอื่น,เลือกช่วงอื่น", r.msg?.text);
   r = await pb(items(r.msg).find((a) => a.label === "ดูเวลาอื่น").data, c.user(U));
   check("reg 4b all times text", r.msg?.text === "ต้องการเวลาไหนคะ");
   check("reg 4b time card: 3 per row", r.msg?.type === "flex" && r.msg.contents.footer.contents.every((row) => row.type === "box" && row.contents.length === 3));
@@ -190,7 +190,7 @@ export async function run(c) {
 
   plan.set("pre2", cls("booking", { slots: { service: "ขูด หินปูน", date_text: be, period: "บ่าย" } }));
   r = await text("pre2", "Upre2");
-  const pmTimes = items(r.msg).filter((a) => a.label !== "ดูเวลาอื่น");
+  const pmTimes = items(r.msg).filter((a) => /^\d\d:\d\d$/.test(a.label));
   check("prefill date + period -> afternoon suggestions", r.msg?.text?.startsWith("ช่วงบ่ายวัน") && pmTimes.length === 2 && pmTimes.every((a) => a.label >= "12:00" && a.label < "16:00") && items(r.msg).every((a) => a.data.length <= 300), items(r.msg).map((a) => a.label).join());
 
   plan.set("pre3", cls("booking", { slots: { service: "ไม่มีบริการนี้", date_text: "วันจันทร์20" } }));

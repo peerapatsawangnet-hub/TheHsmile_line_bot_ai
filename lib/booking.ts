@@ -497,13 +497,16 @@ async function askPeriod(
     return withPrefix("วันนี้คิวเต็มแล้วค่ะ", await askDate(service, right, visit, now, "", replaces));
   }
 
-  const items = Object.entries(PERIODS)
+  const params = flowParams(service, right, visit, replaces);
+  const items: ChoiceButton[] = Object.entries(PERIODS)
     .filter(([, { from, to }]) => slots.some((start) => start >= from && start < to))
     .map(([code, { label }]) => ({
       label,
-      data: postbackData({ a: "period", ...flowParams(service, right, visit, replaces), d: date, p: code }),
+      data: postbackData({ a: "period", ...params, d: date, p: code }),
       displayText: label,
     }));
+  // ลูกค้าที่ถามวันมาเอง (ข้ามการ์ดเลือกวัน) ต้องมีทางเปลี่ยนวันได้
+  items.push({ label: "เลือกวันอื่น", data: postbackData({ a: "dates", ...params }), displayText: "เลือกวันอื่น", secondary: true });
   return choices(`${formatDate(`${date}T12:00:00${OFFSET}`)} สะดวกช่วงไหนคะ`, items);
 }
 
@@ -518,7 +521,8 @@ async function askTime(
   all = false,
 ): Promise<Message> {
   const { from, to, label } = PERIODS[period] ?? PERIODS.am;
-  const slots = (await slotsForDate(service, date, now)).filter((start) => start >= from && start < to);
+  const daySlots = await slotsForDate(service, date, now);
+  const slots = daySlots.filter((start) => start >= from && start < to);
   if (slots.length === 0) {
     return withPrefix("ช่วงนี้คิวเต็มแล้วค่ะ", await askPeriod(service, right, visit, date, now, replaces));
   }
@@ -529,11 +533,20 @@ async function askTime(
     data: postbackData({ a: "slot", ...params, d: date, p: period, t: String(start) }),
     displayText: `${clock(start)} น.`,
   }));
-  if (all || slots.length <= SUGGESTED_TIMES) return choices("ต้องการเวลาไหนคะ", buttons(slots), 3);
+  // ลูกค้าพิมพ์ "แล้วช่วงเย็นล่ะ" บอทไม่รู้ว่ากำลังจองวันไหน (ไม่มีที่เก็บสถานะ) จึงต้องมีปุ่มกลับไปเลือกช่วง
+  const otherPeriod = daySlots.some((start) => start < from || start >= to);
+  const back: ChoiceButton[] = otherPeriod
+    ? [{ label: "เลือกช่วงอื่น", data: postbackData({ a: "date", ...params, d: date }), displayText: "เลือกช่วงอื่น", secondary: true }]
+    : [];
+  const note = `${label}${formatDate(`${date}T12:00:00${OFFSET}`)} ยังมีคิวว่างค่ะ`;
+  if (all || slots.length <= SUGGESTED_TIMES) {
+    const list = choices("ต้องการเวลาไหนคะ", [...buttons(slots.slice(0, MAX_QUICK_REPLIES - back.length)), ...back], 3);
+    return all ? list : withPrefix(note, list);
+  }
 
   // เสนอเวลาว่างที่เร็วที่สุดก่อน ช่วยเติมคิวต้นช่วงและให้ลูกค้าตัดสินใจเร็ว
   return withPrefix(
-    `${label}${formatDate(`${date}T12:00:00${OFFSET}`)} ยังมีคิวว่างค่ะ`,
+    note,
     choices(
       `แนะนำ ${SUGGESTED_TIMES} เวลานี้ค่ะ หากไม่สะดวก กดดูเวลาอื่นได้เลยนะคะ`,
       [
@@ -544,6 +557,7 @@ async function askTime(
           displayText: "ดูเวลาอื่น",
           secondary: true,
         },
+        ...back,
       ],
       2,
     ),

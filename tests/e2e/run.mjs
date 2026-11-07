@@ -324,18 +324,23 @@ const b15 = { s: "ขูดหินปูน", r: "gold" };
 const b60 = { s: "รักษาราก", r: "sso" };
 
 r = await pb(q({ a: "date", ...b15, d: wed }));
-check("special day has morning only", items(r.msg).map((a) => a.label).join() === "ช่วงเช้า");
+check("special day has morning only", items(r.msg).map((a) => a.label).join() === "ช่วงเช้า,เลือกวันอื่น");
 r = await pb(q({ a: "date", ...b15, d: target })); acts = items(r.msg);
-check("period buttons", acts.map((a) => a.label).join() === "ช่วงเช้า,ช่วงบ่าย,ช่วงเย็น");
+check("period buttons", acts.map((a) => a.label).join() === "ช่วงเช้า,ช่วงบ่าย,ช่วงเย็น,เลือกวันอื่น");
 r = await pb(acts[0].data); acts = items(r.msg);
-check("period -> 2 earliest times + ดูเวลาอื่น", r.msg?.text?.startsWith("ช่วงเช้าวัน") && r.msg.text.endsWith("ยังมีคิวว่างค่ะ\nแนะนำ 2 เวลานี้ค่ะ หากไม่สะดวก กดดูเวลาอื่นได้เลยนะคะ") && acts.map((a) => a.label).join() === "10:00,10:15,ดูเวลาอื่น", `${r.msg?.text} | ${acts.map((a) => a.label).join()}`);
+check("period -> 2 earliest times + ดูเวลาอื่น", r.msg?.text?.startsWith("ช่วงเช้าวัน") && r.msg.text.endsWith("ยังมีคิวว่างค่ะ\nแนะนำ 2 เวลานี้ค่ะ หากไม่สะดวก กดดูเวลาอื่นได้เลยนะคะ") && acts.map((a) => a.label).join() === "10:00,10:15,ดูเวลาอื่น,เลือกช่วงอื่น", `${r.msg?.text} | ${acts.map((a) => a.label).join()}`);
 check("ดูเวลาอื่น is grey", r.msg?.contents?.footer?.contents?.at(-1)?.contents?.[0]?.style === "secondary");
-r = await pb(acts.at(-1).data); acts = items(r.msg);
-check("ดูเวลาอื่น -> every free time", r.msg?.text === "ต้องการเวลาไหนคะ" && acts.map((a) => a.label).join() === "10:00,10:15,10:30,10:45,11:00,11:15,11:30,11:45", acts.map((a) => a.label).join());
+r = await pb(acts.find((a) => a.label === "ดูเวลาอื่น").data); acts = items(r.msg);
+check("ดูเวลาอื่น -> every free time", r.msg?.text === "ต้องการเวลาไหนคะ" && acts.map((a) => a.label).join() === "10:00,10:15,10:30,10:45,11:00,11:15,11:30,11:45,เลือกช่วงอื่น", acts.map((a) => a.label).join());
+// seen live: a customer saw only 2 morning times and typed "แล้วช่วงเย็นล่ะ"; the cards must offer the way back
+r = await pb(acts.find((a) => a.label === "เลือกช่วงอื่น").data);
+check("เลือกช่วงอื่น -> periods of the same day", r.msg?.text?.endsWith(" สะดวกช่วงไหนคะ") && items(r.msg).every((a) => a.label === "เลือกวันอื่น" || new URLSearchParams(a.data).get("d") === target), r.msg?.text);
+r = await pb(items(r.msg).find((a) => a.label === "เลือกวันอื่น").data);
+check("เลือกวันอื่น -> date card", r.msg?.text === "ต้องการนัดวันไหนคะ" && items(r.msg).length > 1, r.msg?.text);
 r = await pb(q({ a: "times", ...b60, d: target, p: "am" }));
-check("60 min must end before lunch", items(r.msg).map((a) => a.label).join() === "10:00,10:15,10:30,10:45,11:00", items(r.msg).map((a) => a.label).join());
+check("60 min must end before lunch", items(r.msg).map((a) => a.label).join() === "10:00,10:15,10:30,10:45,11:00,เลือกช่วงอื่น", items(r.msg).map((a) => a.label).join());
 r = await pb(q({ a: "times", ...b15, d: target, p: "eve" }));
-check("15 min can start 18:45, within 13 buttons", items(r.msg).at(-1).label === "18:45" && items(r.msg).length <= 13, String(items(r.msg).length));
+check("15 min can start 18:45, within 13 buttons", items(r.msg).at(-2).label === "18:45" && items(r.msg).at(-1).label === "เลือกช่วงอื่น" && items(r.msg).length <= 13, String(items(r.msg).length));
 
 // capacity from existing appointments
 seed(target, "13:00", 15); seed(target, "13:15", 15);
