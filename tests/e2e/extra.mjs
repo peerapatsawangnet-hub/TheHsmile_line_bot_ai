@@ -93,13 +93,13 @@ export async function run(c) {
   plan.set("จัดฟันเท่าไหร่คะ", cls("faq", { found_in_faq: true, faq_question: "จัดฟันราคาเท่าไหร่", reply: "ประมาณหลักพันค่ะ" }));
   r = await text("จัดฟันเท่าไหร่คะ", "Ufaq");
   check("faq -> sheet answer verbatim", r.msg?.text === "จัดฟันเริ่มต้น 1,111 บาทค่ะ\nหากสนใจรายละเอียด พิมพ์คำว่า “ขอรายละเอียดการจัดฟัน” ได้เลยค่ะ", r.msg?.text);
-  const detailBtn = r.msg?.quickReply?.items?.[0]?.action;
-  check("faq -> button from พิมพ์คำว่า", detailBtn?.type === "message" && detailBtn.text === "ขอรายละเอียดการจัดฟัน" && detailBtn.label.length <= 20, JSON.stringify(detailBtn));
+  const detailBtn = items(r.msg)[0];
+  check("faq with buttons -> big-button card, no quick reply", r.msg?.type === "flex" && !r.msg.quickReply && detailBtn?.type === "message" && detailBtn.text === "ขอรายละเอียดการจัดฟัน" && detailBtn.label.length <= 40, JSON.stringify(detailBtn));
   // seen live: Gemini picked the price row for the button text; an exact question match must win
   plan.set("ขอรายละเอียดการจัดฟัน", cls("faq", { found_in_faq: true, faq_question: "จัดฟันราคาเท่าไหร่", reply: "มีหลายโปรค่ะ" }));
   g = c.geminiCalls();
   r = await text(detailBtn?.text ?? "", "Ufaq");
-  check("tap button -> full multi-line details", r.msg?.text === "🦷 โปร A\n* เดือน 1: 1,111\n* เดือน 2–11: 222" && !r.msg.quickReply, r.msg?.text);
+  check("tap button -> full multi-line details", r.msg?.text === "🦷 โปร A\n* เดือน 1: 1,111\n* เดือน 2–11: 222" && r.msg.type === "text", r.msg?.text);
   check("exact FAQ question skips Gemini", c.geminiCalls() === g, String(c.geminiCalls() - g));
   // a row the owner has not filled in yet must never reach the customer
   plan.set("สงกรานต์เปิดไหมคะ", cls("faq", { found_in_faq: true, faq_question: "สงกรานต์เปิดไหม / ปีใหม่เปิดไหม", reply: "[นโยบายวันหยุดนักขัตฤกษ์] ค่ะ" }));

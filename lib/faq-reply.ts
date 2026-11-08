@@ -1,10 +1,12 @@
 import type { messagingApi } from "@line/bot-sdk";
+import { ChoiceButton, faqCard as renderFaqCard } from "./flex-cards";
 import type { Classification } from "./gemini";
 import { findFaqAnswer } from "./sheet";
 
 const MAX_TEXT_LENGTH = 5000;   // ขีดจำกัดข้อความของ LINE
 const MAX_BUTTONS = 13;
-const MAX_LABEL_LENGTH = 20;
+const MAX_LABEL_LENGTH = 20;     // ป้าย quick reply
+const MAX_CARD_LABEL = 40;       // ป้ายปุ่มในการ์ด
 const MAX_BUTTON_TEXT = 60;
 const THAI = /[฀-๿]/;
 // ช่องที่เจ้าของยังไม่ได้เติม เช่น [นโยบายวันหยุดนักขัตฤกษ์] ห้ามส่งให้ลูกค้า
@@ -48,6 +50,30 @@ function buttonLabel(phrase: string): string {
   if (phrase.length <= MAX_LABEL_LENGTH) return phrase;
   const short = phrase.replace(/^(ขอ|ดู)/, "");
   return short.length <= MAX_LABEL_LENGTH ? short : `${phrase.slice(0, MAX_LABEL_LENGTH - 1)}…`;
+}
+
+// บรรทัดที่จบด้วย พิมพ์ "x" พอดี (เช่น 💰 ราคา พิมพ์ "ราคารากฟันเทียม") คือบรรทัดปุ่ม
+// คืนข้อความหน้าคำว่าพิมพ์เพื่อใช้เป็นป้ายปุ่ม ไม่ใช่บรรทัดปุ่มคืน null
+function buttonLine(line: string, phrase: string): string | null {
+  const match = line.match(/^(.*?)\s*พิมพ์(?:คำว่า)?\s*["“'‘]([^"”'’\n]+)["”'’]\s*$/);
+  return match && match[2].trim() === phrase ? match[1].trim() : null;
+}
+
+// คำตอบที่มีปุ่มส่งเป็นการ์ดปุ่มใหญ่ บรรทัดปุ่มย้ายไปเป็นปุ่ม ข้อความหน้าคำว่าพิมพ์เป็นป้าย
+// พิมพ์ "…" กลางประโยคยังอยู่ในข้อความ และได้ปุ่มที่ใช้คำนั้นเป็นป้าย
+export function faqCard(text: string, buttons: messagingApi.QuickReply): messagingApi.FlexMessage {
+  const lines = text.split("\n");
+  const choices: ChoiceButton[] = (buttons.items ?? []).map((item) => {
+    const action = item.action as messagingApi.MessageAction;
+    const phrase = action.text ?? "";
+    const label = action.label ?? phrase;
+    const at = lines.findIndex((line) => buttonLine(line, phrase) !== null);
+    const prefix = at >= 0 ? buttonLine(lines[at], phrase) : null;
+    if (at >= 0) lines.splice(at, 1);
+    return { label: prefix || (phrase.length <= MAX_CARD_LABEL ? phrase : label), data: "", displayText: phrase, message: true };
+  });
+  const body = lines.join("\n").replace(/\n{3,}/g, "\n\n").trim() || "เลือกหัวข้อที่ต้องการได้เลยค่ะ";
+  return renderFaqCard(body, choices);
 }
 
 // คำตอบที่เขียนว่า พิมพ์ "ขอรายละเอียดการจัดฟัน" กลายเป็นปุ่มให้กดแทนการพิมพ์

@@ -140,6 +140,19 @@ export function choiceCard(question: string, buttons: ChoiceButton[], columns = 
   return note ? withCardNote(note, card) : card;
 }
 
+// คำตอบ FAQ ที่มีปุ่ม: ข้อความจาก Sheet ตัวปกติ (อาจยาวหลายบรรทัด) และปุ่มใหญ่แบบเดียวกับการ์ดจองคิว
+export function faqCard(text: string, buttons: ChoiceButton[]): messagingApi.FlexMessage {
+  return {
+    type: "flex",
+    altText: text.slice(0, 1500),
+    contents: {
+      type: "bubble",
+      body: { type: "box", layout: "vertical", contents: [{ type: "text", text, wrap: true }] },
+      footer: { type: "box", layout: "vertical", spacing: "sm", contents: buttonRows(buttons, 1) },
+    },
+  };
+}
+
 // เติมบรรทัดเหนือคำถาม เช่น "เวลานี้คิวเต็มแล้วค่ะ"
 export function withCardNote(note: string, card: messagingApi.FlexMessage): messagingApi.FlexMessage {
   const bubble = card.contents as messagingApi.FlexBubble;

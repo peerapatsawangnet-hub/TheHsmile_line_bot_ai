@@ -271,10 +271,22 @@ function prefillFromSlots(slots: Slots, now: number, text = ""): Prefill {
   };
 }
 
+const nameKey = (name: string) => name.replace(/\s+/g, "").toLowerCase();
+
+// "นัดปรึกษารากฟันเทียม" หรือ "จองคิวฟอกสีฟัน" (มักมาจากปุ่มในคำตอบ FAQ) ตรงกับชื่อบริการหรือกลุ่มพอดี
+// คืนชื่อนั้นเพื่อเข้าการจองทันทีโดยไม่ผ่าน Gemini
+export async function namedBookingTarget(text: string): Promise<string | null> {
+  const match = text.trim().match(/^(?:นัด|จอง(?:คิว)?)\s*(.+)$/);
+  if (!match) return null;
+  const services = await getServices().catch(() => []);
+  const names = [...services.map(({ name }) => name), ...services.map(({ group }) => group).filter(Boolean)];
+  return names.find((name) => nameKey(name) === nameKey(match[1])) ?? null;
+}
+
 function matchService(services: Service[], name: string | undefined): Service | undefined {
-  const wanted = name?.replace(/\s+/g, "").toLowerCase();
+  const wanted = name ? nameKey(name) : "";
   if (!wanted) return undefined;
-  const key = (service: Service) => service.name.replace(/\s+/g, "").toLowerCase();
+  const key = (service: Service) => nameKey(service.name);
   const exact = services.find((service) => key(service) === wanted);
   if (exact) return exact;
   const partial = services.filter((service) => key(service).includes(wanted) || wanted.includes(key(service)));
@@ -834,13 +846,14 @@ export async function startBooking(userId: string | undefined, text: string, slo
 
     const prefill = prefillFromSlots(slots, now, text);
     const services = await getServices();
+    // ชื่อกลุ่มตรงพอดีมาก่อน ไม่อย่างนั้น "ครอบฟัน / ทำฟันปลอม" จะไปตรงบางส่วนกับบริการ "ครอบฟัน"
+    const groupNames = [...new Set(services.map((s) => s.group).filter(Boolean))];
+    const exactGroup = slots.service ? groupNames.find((name) => nameKey(name) === nameKey(slots.service ?? "")) : undefined;
+    if (exactGroup) return await askGroup(exactGroup, prefill, now);
     const service = matchService(services, slots.service);
     if (service) return await continueAfterService(service, prefill, userId, now);
     // ลูกค้าพูดถึงทั้งหมวด เช่น "อยากทำฟันปลอม" ให้เลือกบริการในหมวดนั้น
-    const group = matchService(
-      [...new Set(services.map((s) => s.group).filter(Boolean))].map((name) => ({ ...services[0], name })),
-      slots.service,
-    );
+    const group = matchService(groupNames.map((name) => ({ ...services[0], name })), slots.service);
     if (group) return await askGroup(group.name, prefill, now);
     if (prefill.date && services.length > 0) return await askServiceForDate(services, prefill, prefill.date, now);
     return await askService(prefill);

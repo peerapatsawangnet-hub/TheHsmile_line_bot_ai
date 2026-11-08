@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import Papa from "papaparse";
-import { exactFaqReply, faqButtons, faqReply } from "../lib/faq-reply";
+import { exactFaqReply, faqButtons, faqCard, faqReply } from "../lib/faq-reply";
 import type { Classification } from "../lib/gemini";
 import { findFaqAnswer } from "../lib/sheet";
 
@@ -62,6 +62,28 @@ test("exactFaqReply: only formatted (multi-line) rows skip Gemini", () => {
   assert.equal(exactFaqReply(csv, "เบอร์โทรอะไร"), null);
   assert.equal(exactFaqReply(csv, "สงกรานต์เปิดไหม"), null);
   assert.equal(exactFaqReply(null, "ขอรายละเอียดการจัดฟัน"), null);
+});
+
+test("faqCard: lines ending in พิมพ์ \"...\" become big buttons labelled by their lead text", () => {
+  const answer = [
+    "🦷 สนใจทำรากฟันเทียมใช่ไหมคะ",
+    "",
+    "💰 ราคา พิมพ์ \"ราคารากฟันเทียม\"",
+    "📅 นัดตรวจประเมิน พิมพ์ \"นัดปรึกษารากฟันเทียม\"",
+    "หากสนใจ พิมพ์คำว่า “ขอแอดมิน” ได้เลยค่ะ",
+  ].join("\n");
+  const card = faqCard(answer, faqButtons(answer)!);
+  const bubble = card.contents as { body: { contents: { text: string }[] }; footer: { contents: { action: { label: string; text: string } }[] } };
+  // a mid-sentence พิมพ์ "..." stays in the text and still gets a button
+  assert.equal(bubble.body.contents[0].text, "🦷 สนใจทำรากฟันเทียมใช่ไหมคะ\n\nหากสนใจ พิมพ์คำว่า “ขอแอดมิน” ได้เลยค่ะ");
+  assert.deepEqual(bubble.footer.contents.map(({ action }) => [action.label, action.text]), [
+    ["💰 ราคา", "ราคารากฟันเทียม"],
+    ["📅 นัดตรวจประเมิน", "นัดปรึกษารากฟันเทียม"],
+    ["ขอแอดมิน", "ขอแอดมิน"],
+  ]);
+  const onlyButtons = faqCard("พิมพ์ \"จองคิว\"", faqButtons("พิมพ์ \"จองคิว\"")!);
+  const onlyBody = (onlyButtons.contents as { body: { contents: { text: string }[] } }).body.contents[0].text;
+  assert.equal(onlyBody, "เลือกหัวข้อที่ต้องการได้เลยค่ะ");
 });
 
 test("faqButtons turns พิมพ์ \"...\" into tap buttons", () => {

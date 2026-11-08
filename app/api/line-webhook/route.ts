@@ -9,12 +9,13 @@ import {
   isAdminAction,
   isBookingEnabled,
   isBookingRequest,
+  namedBookingTarget,
   startBooking,
   startCancel,
   startReschedule,
 } from "@/lib/booking";
 import { getDoctorScheduleImage } from "@/lib/booking-config";
-import { exactFaqReply, faqReply } from "@/lib/faq-reply";
+import { exactFaqReply, faqCard, faqReply } from "@/lib/faq-reply";
 import { LOOKUP_TIMEOUT_MS, THANKS_REPLY } from "@/lib/config";
 import { handoffCard } from "@/lib/flex-cards";
 import { Classification, classifyMessage } from "@/lib/gemini";
@@ -172,7 +173,8 @@ async function act(decision: Decision, userId: string, replyToken: string, messa
   const now = Date.now();
   switch (decision.kind) {
     case "reply":
-      return sendReply(replyToken, { ...text(decision.text), quickReply: decision.buttons });
+      // คำตอบที่มีปุ่มเป็นการ์ดปุ่มใหญ่ แบบเดียวกับการ์ดจองคิว
+      return sendReply(replyToken, decision.buttons ? faqCard(decision.text, decision.buttons) : text(decision.text));
     case "thanks":
       return sendReply(replyToken, text(THANKS_REPLY));
     case "silent":
@@ -244,8 +246,10 @@ async function handleText(userId: string, replyToken: string, message: string): 
     // ลูกค้าที่กำลังกรอกชื่อและเบอร์ต้องอยู่ใน flow ห้ามผ่าน classifier
     const details = await handleBookingDetails(userId, message);
     if (details) return sendReply(replyToken, details);
-    if (isBookingRequest(message)) {
-      const reply = await startBooking(userId, message);
+    // "นัดปรึกษารากฟันเทียม" (ปุ่มในคำตอบ FAQ) เข้าการจองบริการนั้นเลย
+    const named = await namedBookingTarget(message);
+    if (named || isBookingRequest(message)) {
+      const reply = await startBooking(userId, message, named ? { service: named } : {});
       if (reply) await sendReply(replyToken, reply);
       return;
     }

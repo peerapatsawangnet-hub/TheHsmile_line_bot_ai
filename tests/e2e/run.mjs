@@ -309,6 +309,14 @@ check("urgent button is red, sends its text", r.msg.contents.footer.contents.at(
   g = await pb(items(g.msg)[0].data, user("Ugroup"));
   check("group service -> self-pay note + dates", g.msg?.text === "บริการครอบฟันชำระเองค่ะ ใช้สิทธิบัตรทองหรือประกันสังคมไม่ได้นะคะ\nต้องการนัดวันไหนคะ", g.msg?.text);
 }
+// "นัด" / "จองคิว" + exact service or group name (FAQ buttons send these): straight in, no Gemini
+{
+  const g0 = geminiCalls;
+  let n = await text("นัดรักษาราก", "Unamed");
+  check("นัด + service name -> dates of that service, no Gemini", n.msg?.text === "ต้องการนัดวันไหนคะ" && items(n.msg).every((a) => a.label === "วันถัดไป ›" || new URLSearchParams(a.data).get("s") === "รักษาราก") && geminiCalls === g0, n.msg?.text);
+  n = await text("จองคิว ครอบฟัน / ทำฟันปลอม", "Unamed");
+  check("จองคิว + group name -> that group's card", n.msg?.text?.startsWith("ครอบฟัน / ทำฟันปลอม\n") && geminiCalls === g0, n.msg?.text);
+}
 
 // self-pay only service: told at once, rights never asked, right fixed to ชำระเอง on every button
 r = await pb(acts.find((a) => a.label === "จัดฟัน").data);
