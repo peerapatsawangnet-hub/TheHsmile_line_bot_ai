@@ -32,7 +32,7 @@ import {
   withCardNote,
 } from "./flex-cards";
 import type { Slots } from "./gemini";
-import { notifyAdmin } from "./handoff";
+import { notifyAdmin, URGENT_BUTTON_TEXT } from "./handoff";
 import { getLineClient } from "./line";
 import { findDn } from "./patients";
 import { MONTH_SHORT, parseDateText, parsePeriod, parseTimeText } from "./thai-datetime";
@@ -318,45 +318,76 @@ async function askService(prefill: Prefill = {}, only?: Service[], note = ""): P
     console.error(JSON.stringify({ tag: "booking_no_services" }));
     throw new NoServicesError("no active services");
   }
+  // บริการที่มี group เดียวกันรวมเป็นปุ่มเดียว อยู่ตำแหน่งของบริการแรกในกลุ่ม
+  const entries: ChoiceButton[] = [];
+  const groups = new Set<string>();
+  for (const { name, group } of services) {
+    if (!group) {
+      entries.push({ label: name, data: postbackData({ a: "svc", s: name, ...prefillParams(prefill) }), displayText: name });
+    } else if (!groups.has(group)) {
+      groups.add(group);
+      entries.push({ label: group, data: postbackData({ a: "grp", g: group, ...prefillParams(prefill) }), displayText: group });
+    }
+  }
   const message = choices(
     `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร ${CLINIC_PHONE} ได้เลยค่ะ 🦷`,
     [
-      ...services.slice(0, MAX_QUICK_REPLIES - 1).map(({ name }) => ({
-        label: name,
-        data: postbackData({ a: "svc", s: name, ...prefillParams(prefill) }),
-        displayText: name,
-      })),
-      // ปุ่มสุดท้ายเสมอ ส่งเป็นข้อความที่มี "ขอแอดมิน" จึงเข้าคำสั่งตรง: การ์ดติดต่อกลับ + แจ้งแอดมิน
+      ...entries.slice(0, MAX_QUICK_REPLIES - 2),
+      // ส่งเป็นข้อความ จึงเข้าคำสั่งตรง: การ์ดติดต่อกลับ + แจ้งแอดมิน ไม่เข้าการจองปกติ
+      { label: URGENT_BUTTON_TEXT, data: "", displayText: URGENT_BUTTON_TEXT, message: true, urgent: true },
       { label: OTHER_SERVICE_LABEL, data: "", displayText: OTHER_SERVICE_TEXT, message: true },
     ],
   );
   return note ? withPrefix(note, message) : message;
 }
 
+const inBookingWindow = (date: string, now: number) => date >= dateAt(now, 0) && date <= dateAt(now, BOOKING_DAYS_AHEAD);
+
+// บริการที่ยังจองวันนั้นได้: มีเวลาว่างอย่างน้อยหนึ่งเวลา และคุณหมอเข้าถ้าบริการต้องใช้คุณหมอ
+async function openOnDate(services: Service[], date: string, now: number): Promise<Service[]> {
+  const ranges = rangesFor(date, await getBookingHours());
+  if (ranges.length === 0) return [];
+  const withDoctor = services.find((service) => service.needsDoctor);
+  const [events, allowed] = await Promise.all([
+    loadEvents(toIso(date, 0), endOfDay(date), now),
+    withDoctor ? doctorDays(withDoctor, now) : null,
+  ]);
+  const doctorIn = !allowed || allowed.has(date);
+  return services.filter((service) =>
+    (!service.needsDoctor || doctorIn) && freeSlots(date, ranges, service.minutes, events, now).length > 0);
+}
+
 // ลูกค้าถามคิวว่างของวันหนึ่ง: ให้เลือกเฉพาะบริการที่ยังจองวันนั้นได้ แล้วไปขั้นเลือกช่วงของวันนั้นเลย
 // ไม่บอกช่วงเวลาว่างรวมบนการ์ด (เจ้าของสั่งเอาออก) เวลาที่ถูกต้องขึ้นกับบริการ จึงบอกหลังเลือกบริการ
 // วันที่อยู่นอกช่วงเปิดจองถามบริการตามปกติ ขั้นหลังเลือกประเภทลูกค้าจะบอกเองว่าไม่มีคิว
 async function askServiceForDate(services: Service[], prefill: Prefill, date: string, now: number): Promise<Message> {
-  if (date < dateAt(now, 0) || date > dateAt(now, BOOKING_DAYS_AHEAD)) return askService(prefill);
+  if (!inBookingWindow(date, now)) return askService(prefill);
   const day = formatDate(`${date}T12:00:00${OFFSET}`);
-  const ranges = rangesFor(date, await getBookingHours());
-  const withDoctor = services.find((service) => service.needsDoctor);
-  const [events, allowed] = ranges.length > 0
-    ? await Promise.all([loadEvents(toIso(date, 0), endOfDay(date), now), withDoctor ? doctorDays(withDoctor, now) : null])
-    : [[], null];
-  const doctorIn = !allowed || allowed.has(date);
-  const open = services
-    .map((service) => ({
-      service,
-      slots: !service.needsDoctor || doctorIn ? freeSlots(date, ranges, service.minutes, events, now) : [],
-    }))
-    .filter(({ slots }) => slots.length > 0);
-
+  const open = await openOnDate(services, date, now);
   if (open.length === 0) {
     return askService({ right: prefill.right }, undefined, `${day} ไม่มีคิวว่างค่ะ`);
   }
   const missing = open.length < services.length ? `บริการที่ไม่อยู่ในปุ่มด้านล่าง ${day} คิวเต็มหรือคุณหมอไม่เข้าค่ะ` : "";
-  return askService(prefill, open.map(({ service }) => service), missing);
+  return askService(prefill, open, missing);
+}
+
+// เลือกบริการในกลุ่ม เช่น "ครอบฟัน / ทำฟันปลอม" ถ้าลูกค้าถามวันมา แสดงเฉพาะบริการที่วันนั้นจองได้
+async function askGroup(group: string, prefill: Prefill, now: number): Promise<Message> {
+  const all = (await getServices()).filter((service) => service.group === group);
+  if (all.length === 0) return askService(prefill);
+  const open = prefill.date && inBookingWindow(prefill.date, now) ? await openOnDate(all, prefill.date, now) : all;
+  const services = open.length > 0 ? open : all;
+  return withPrefix(
+    group,
+    choices("สนใจรับบริการประเภทใดคะ กรุณาเลือกบริการที่ต้องการ หากไม่แน่ใจสามารถให้ทันตแพทย์ตรวจประเมินก่อนได้ค่ะ 🦷", [
+      ...services.slice(0, MAX_QUICK_REPLIES - 1).map(({ name }) => ({
+        label: name,
+        data: postbackData({ a: "svc", s: name, ...prefillParams(prefill) }),
+        displayText: name,
+      })),
+      { label: "‹ บริการอื่น", data: postbackData({ a: "svcs", ...prefillParams(prefill) }), displayText: "ดูบริการอื่น", secondary: true },
+    ]),
+  );
 }
 
 // ลำดับคำถาม (คุณหมอเลือก): บริการ → วัน → ช่วง → เวลา → สิทธิ → ชื่อ+เบอร์ → เคยมาไหม (เฉพาะคนที่ไม่พบ DN)
@@ -742,9 +773,11 @@ async function completeBooking(event: CalendarEvent): Promise<Message> {
   await sendToAdmin(requestNotice("🗓️ คำขอนัดใหม่", summary, when, bookingActions(event.id)), "booking_notify_failed");
 
   console.log(JSON.stringify({ tag: "booking_created" }));
+  // ข้อความเฉพาะบริการจากคอลัมน์ booking_note อ่านไม่ได้ก็ส่งข้อความปกติ นัดบันทึกไปแล้ว
+  const note = (await getServices().catch(() => [])).find(({ name }) => name === service)?.bookingNote;
   return {
     type: "text",
-    text: `ส่งคำขอนัด${service} ${when} แล้วค่ะ แอดมินจะยืนยันนัดให้อีกครั้งนะคะ 🙏`,
+    text: `ส่งคำขอนัด${service} ${when} แล้วค่ะ แอดมินจะยืนยันนัดให้อีกครั้งนะคะ 🙏${note ? `\n${note}` : ""}`,
   };
 }
 
@@ -803,6 +836,12 @@ export async function startBooking(userId: string | undefined, text: string, slo
     const services = await getServices();
     const service = matchService(services, slots.service);
     if (service) return await continueAfterService(service, prefill, userId, now);
+    // ลูกค้าพูดถึงทั้งหมวด เช่น "อยากทำฟันปลอม" ให้เลือกบริการในหมวดนั้น
+    const group = matchService(
+      [...new Set(services.map((s) => s.group).filter(Boolean))].map((name) => ({ ...services[0], name })),
+      slots.service,
+    );
+    if (group) return await askGroup(group.name, prefill, now);
     if (prefill.date && services.length > 0) return await askServiceForDate(services, prefill, prefill.date, now);
     return await askService(prefill);
   } catch (err) {
@@ -1017,13 +1056,18 @@ export async function handleBookingPostback(data: string, userId: string | undef
     }
   }
   // right/visit: ปุ่มจากการ์ดแบบเดิมที่ยังค้างในแชต พาเข้าลำดับใหม่
-  if (!["svc", "right", "visit", "dates", "date", "period", "times", "slot"].includes(action ?? "")) return null;
+  if (!["grp", "svcs", "svc", "right", "visit", "dates", "date", "period", "times", "slot"].includes(action ?? "")) return null;
 
   try {
     if (!userId) return null;
     const now = Date.now();
     const prefill = prefillFrom(params);
-    const service = (await getServices()).find(({ name }) => name === params.get("s"));
+    if (action === "grp") return await askGroup(params.get("g") ?? "", prefill, now);
+    const services = await getServices();
+    if (action === "svcs") {
+      return prefill.date ? await askServiceForDate(services, prefill, prefill.date, now) : await askService(prefill);
+    }
+    const service = services.find(({ name }) => name === params.get("s"));
     if (!service) return await askService(prefill);
     const right = RIGHTS[params.get("r") ?? ""] ? params.get("r") ?? "" : "";
     if (action === "svc" || action === "right" || action === "visit") {

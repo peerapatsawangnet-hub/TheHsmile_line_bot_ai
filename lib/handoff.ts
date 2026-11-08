@@ -35,6 +35,15 @@ export function isCancelCommand(message: string): boolean {
   return message.includes("ยกเลิกนัด");
 }
 
+// ปุ่มสีแดงบนการ์ดเลือกบริการ ส่งข้อความนี้ตรงตัว: ไม่เข้าการจองปกติ ให้แอดมินประเมินความเร่งด่วนก่อน
+// ไม่ใช้แจ้งด่วน 🔴 (เก็บไว้สำหรับอาการอันตรายที่ classifier จับได้จากข้อความที่ลูกค้าพิมพ์เอง)
+export const URGENT_BUTTON_TEXT = "มีอาการปวด / บวม / ครอบฟันหลุด";
+export const URGENT_REASON = "อาการเร่งด่วน (ปวด / บวม / ครอบฟันหลุด) โปรดติดต่อกลับโดยเร็ว";
+
+export function isUrgentButton(message: string): boolean {
+  return message.trim() === URGENT_BUTTON_TEXT;
+}
+
 export function isHandoffCommand(message: string): boolean {
   return includesAny(message, HANDOFF_COMMANDS) || isAppointmentChangeCommand(message);
 }

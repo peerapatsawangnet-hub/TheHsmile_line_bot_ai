@@ -23,9 +23,11 @@ import {
   isCancelCommand,
   isHandoffCommand,
   isRescheduleCommand,
+  isUrgentButton,
   notifyAdmin,
   notifyEmergency,
   notifyShadow,
+  URGENT_REASON,
 } from "@/lib/handoff";
 import { getLineClient } from "@/lib/line";
 import { getSettings } from "@/lib/settings";
@@ -226,6 +228,11 @@ async function handleText(userId: string, replyToken: string, message: string): 
   // คำสั่งตรงทำงานแบบเดิมเสมอ
   if (isRescheduleCommand(message)) return reschedule(userId, replyToken, message);
   if (isCancelCommand(message)) return cancel(userId, replyToken, message);
+  if (isUrgentButton(message)) {
+    console.log(JSON.stringify({ tag: "handoff" }));
+    await Promise.all([notifyAdmin(userId, URGENT_REASON, message), sendReply(replyToken, handoffCard())]);
+    return;
+  }
   if (isHandoffCommand(message)) {
     const reason = isAppointmentChangeCommand(message) ? "ขอเปลี่ยนหรือยกเลิกนัด" : "ขอคุยกับแอดมิน";
     console.log(JSON.stringify({ tag: "handoff" }));

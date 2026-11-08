@@ -3,7 +3,16 @@ import { SHEET_CACHE_MS, SHEET_TIMEOUT_MS } from "./config";
 
 // needsDoctor: นัดได้เฉพาะวันที่คุณหมอเข้า ค่าว่างถือว่าต้องใช้คุณหมอ
 // acceptsRights: ใช้สิทธิ สปสช และประกันสังคมได้ ค่าว่างถือว่าใช้ได้ FALSE คือชำระเองเท่านั้น
-export type Service = { name: string; minutes: number; needsDoctor: boolean; acceptsRights: boolean };
+// group: บริการที่ใส่กลุ่มเดียวกันรวมเป็นปุ่มเดียวบนการ์ดแรก กดแล้วจึงเลือกบริการในกลุ่ม ว่างคือปุ่มของตัวเอง
+// bookingNote: ข้อความที่ต่อท้ายข้อความ "ส่งคำขอนัด…" เฉพาะบริการนี้ ว่างคือไม่ต่อ
+export type Service = {
+  name: string;
+  minutes: number;
+  needsDoctor: boolean;
+  acceptsRights: boolean;
+  group: string;
+  bookingNote: string;
+};
 export type TimeRange = { open: number; close: number };
 export type BookingHours = {
   // คีย์คือเลขวันแบบ Date.getDay() วันที่ไม่มีแถวถือว่าปิด
@@ -66,6 +75,8 @@ export async function getServices(): Promise<Service[]> {
       minutes,
       needsDoctor: row.needs_doctor?.trim().toUpperCase() !== "FALSE",
       acceptsRights: row.accepts_rights?.trim().toUpperCase() !== "FALSE",
+      group: row.group?.trim() ?? "",
+      bookingNote: row.booking_note?.trim() ?? "",
     }];
   });
 }

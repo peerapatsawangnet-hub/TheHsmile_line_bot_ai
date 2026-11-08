@@ -39,8 +39,16 @@ let calendarFails = false;
 let hideBusyOnce = false;
 let insertRival = null;
 let createdClock = Date.now();
-// จัดฟัน: self-pay only (accepts_rights FALSE); blank accepts_rights means rights allowed
-let servicesCsv = "service,duration_minutes,active,needs_doctor,accepts_rights\nขูดหินปูน,15,TRUE,FALSE,\nรักษาราก,60,,,\nจัดฟัน,30,TRUE,FALSE,FALSE\nปิดอยู่,15,FALSE,,\n";
+// จัดฟัน: self-pay only; ครอบฟัน + สะพานฟัน share a group (one button, then a sub-card); ครอบฟัน has a booking note
+let servicesCsv = [
+  "service,duration_minutes,active,needs_doctor,accepts_rights,group,booking_note",
+  "ขูดหินปูน,15,TRUE,FALSE,,,",
+  "รักษาราก,60,,,,,",
+  "จัดฟัน,30,TRUE,FALSE,FALSE,,",
+  "ครอบฟัน,60,TRUE,FALSE,FALSE,ครอบฟัน / ทำฟันปลอม,ทันตแพทย์จะตรวจประเมินก่อนทำครอบฟันนะคะ",
+  "สะพานฟัน,60,TRUE,FALSE,FALSE,ครอบฟัน / ทำฟันปลอม,",
+  "ปิดอยู่,15,FALSE,,,,",
+].join("\n") + "\n";
 // settings tab unreachable until the extra suite checks the cold-start fallback
 let settingsDown = true;
 let settingsCsv = "key,value\nbot_enabled,TRUE\nbot_mode,live\n";
@@ -277,14 +285,29 @@ const seed = (date, hhmm, min, extra = {}) => {
 
 let r = await text("อยากจองคิวค่ะ");
 let acts = items(r.msg);
-check("booking text -> services", acts.length === 4 && acts[0].label === "ขูดหินปูน" && acts.at(-1).type === "message" && acts.at(-1).text === "ขอแอดมิน (นัดบริการอื่น)", acts.map((a) => a.label).join(","));
+check("booking text -> services, group as one button, urgent + other last", acts.map((a) => a.label).join() === "ขูดหินปูน,รักษาราก,จัดฟัน,ครอบฟัน / ทำฟันปลอม,มีอาการปวด / บวม / ครอบฟันหลุด,บริการอื่น ๆ / ติดต่อแอดมิน" && acts.at(-1).type === "message" && acts.at(-1).text === "ขอแอดมิน (นัดบริการอื่น)", acts.map((a) => a.label).join(","));
 const sameButtons = (m) => m?.type === "flex" && !m.quickReply && cardActions(m).length > 0;
-check("services card: big buttons only, no quick reply", sameButtons(r.msg) && cardActions(r.msg).length === 4);
+check("services card: big buttons only, no quick reply", sameButtons(r.msg) && cardActions(r.msg).length === 6);
+check("urgent button is red, sends its text", r.msg.contents.footer.contents.at(-2).color === "#DC2626" && acts.at(-2).type === "message" && acts.at(-2).text === "มีอาการปวด / บวม / ครอบฟันหลุด");
 {
   const before = pushes.length;
   const other = await text(acts.at(-1).text, "Uother");
   const notice = pushes.slice(before).at(-1)?.messages[0];
   check("other service button -> handoff card + admin sees why", other.msg?.altText && other.msg.type === "flex" && JSON.stringify(notice ?? "").includes("ขอแอดมิน (นัดบริการอื่น)"), JSON.stringify(notice).slice(0, 160));
+  const beforeUrgent = pushes.length;
+  const g0 = geminiCalls;
+  const urgent = await text(acts.at(-2).text, "Uurgent");
+  const urgentNotice = JSON.stringify(pushes.slice(beforeUrgent).at(-1)?.messages[0] ?? "");
+  check("urgent button -> handoff card + admin told to call back, no booking, no Gemini", urgent.msg?.type === "flex" && urgentNotice.includes("อาการเร่งด่วน (ปวด / บวม / ครอบฟันหลุด) โปรดติดต่อกลับโดยเร็ว") && geminiCalls === g0 && !live().some((e) => e.extendedProperties?.private?.lineUserId === "Uurgent"), urgentNotice.slice(0, 200));
+}
+// group button -> sub-card of that group only, with a way back; picking a service continues as usual
+{
+  let g = await pb(acts.find((a) => a.label === "ครอบฟัน / ทำฟันปลอม").data, user("Ugroup"));
+  check("group -> its services + back", g.msg?.text === "ครอบฟัน / ทำฟันปลอม\nสนใจรับบริการประเภทใดคะ กรุณาเลือกบริการที่ต้องการ หากไม่แน่ใจสามารถให้ทันตแพทย์ตรวจประเมินก่อนได้ค่ะ 🦷" && items(g.msg).map((a) => a.label).join() === "ครอบฟัน,สะพานฟัน,‹ บริการอื่น", `${g.msg?.text} | ${items(g.msg).map((a) => a.label).join()}`);
+  const back = await pb(items(g.msg).at(-1).data, user("Ugroup"));
+  check("‹ บริการอื่น -> service card again", back.msg?.text?.startsWith("ต้องการนัดบริการใดคะ"), back.msg?.text);
+  g = await pb(items(g.msg)[0].data, user("Ugroup"));
+  check("group service -> self-pay note + dates", g.msg?.text === "บริการครอบฟันชำระเองค่ะ ใช้สิทธิบัตรทองหรือประกันสังคมไม่ได้นะคะ\nต้องการนัดวันไหนคะ", g.msg?.text);
 }
 
 // self-pay only service: told at once, rights never asked, right fixed to ชำระเอง on every button
@@ -569,6 +592,12 @@ r = await pb(dnSlot(10 * 60 + 15), user("Udn2"));
 r = await text("คนอื่น ดีเอ็น 0870000001", "Udn2");
 r = await pb(items(r.msg).find((a) => a.label === "มาครั้งแรก").data, user("Udn2"));
 check("same phone, other name -> no DN", live().find((e) => e.extendedProperties?.private?.lineUserId === "Udn2")?.summary === "[รอแอดมิน] คนอื่น ดีเอ็น 0870000001 ขูดหินปูน สปสช คนไข้ใหม่ ไลน์ OA");
+// booking_note column: added under the usual request text for that service only
+r = await pb(q({ a: "slot", s: "ครอบฟัน", d: dnDay, p: "pm", t: String(15 * 60) }), user("Unote"));
+r = await text("ทดสอบ โน้ต 0822222222", "Unote");
+r = await pb(items(r.msg).find((a) => a.label === "มาครั้งแรก").data, user("Unote"));
+check("service note appended to request text", /^ส่งคำขอนัดครอบฟัน .+ แอดมินจะยืนยันนัดให้อีกครั้งนะคะ 🙏\nทันตแพทย์จะตรวจประเมินก่อนทำครอบฟันนะคะ$/.test(r.msg?.text ?? ""), r.msg?.text);
+check("self-pay group service saved as ชำระเอง", live().find((e) => e.extendedProperties?.private?.lineUserId === "Unote")?.summary === "[รอแอดมิน] ทดสอบ โน้ต 0822222222 ครอบฟัน ชำระเอง คนไข้ใหม่ ไลน์ OA");
 check("patient sheet read once for all bookings (cached)", patientReads === 1, String(patientReads));
 check("all month tabs read, quoted", lastPatientRanges.join("|") === "'ตุลาคม 2569'|'พฤศจิกายน 2569'|'สรุป'", lastPatientRanges.join("|"));
 

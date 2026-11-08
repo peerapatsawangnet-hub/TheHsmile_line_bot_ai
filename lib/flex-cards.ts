@@ -1,5 +1,5 @@
 import { messagingApi } from "@line/bot-sdk";
-import { BUTTON_COLOR, CLINIC_PHONE, CLINIC_PHONE_URI, HANDOFF_REPLY } from "./config";
+import { BUTTON_COLOR, CLINIC_PHONE, CLINIC_PHONE_URI, HANDOFF_REPLY, URGENT_BUTTON_COLOR } from "./config";
 
 export const BOOKING_CARD_NOTE = "เติม HN หรือแก้เวลาใน Google Calendar ก่อนกดยืนยันได้ ลูกค้าจะได้รับเวลาล่าสุด";
 
@@ -85,13 +85,21 @@ export function reminderCard(when: string, eventId: string): messagingApi.FlexMe
 
 // secondary: ปุ่มรอง เช่น "วันถัดไป ›" หรือ "ไม่ยกเลิก" แสดงเป็นสีเทา
 // message: ปุ่มที่ส่งเป็นข้อความแทน postback เพื่อเข้าคำสั่งตรงเดียวกับที่ลูกค้าพิมพ์เอง
-export type ChoiceButton = { label: string; data: string; displayText: string; secondary?: boolean; message?: boolean };
+// urgent: ปุ่มเรื่องเร่งด่วน (ปวด บวม ฟันหลุด) สีแดงให้เห็นต่างจากปุ่มบริการ
+export type ChoiceButton = {
+  label: string;
+  data: string;
+  displayText: string;
+  secondary?: boolean;
+  message?: boolean;
+  urgent?: boolean;
+};
 
-function choiceButton({ label, data, displayText, secondary, message }: ChoiceButton): messagingApi.FlexButton {
+function choiceButton({ label, data, displayText, secondary, message, urgent }: ChoiceButton): messagingApi.FlexButton {
   return {
     type: "button",
     style: secondary ? "secondary" : "primary",
-    ...(secondary ? {} : { color: BUTTON_COLOR }),
+    ...(secondary ? {} : { color: urgent ? URGENT_BUTTON_COLOR : BUTTON_COLOR }),
     height: "sm",
     flex: 1,
     action: message
