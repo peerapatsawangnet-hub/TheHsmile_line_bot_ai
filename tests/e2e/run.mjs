@@ -285,10 +285,10 @@ const seed = (date, hhmm, min, extra = {}) => {
 
 let r = await text("อยากจองคิวค่ะ");
 let acts = items(r.msg);
-check("booking text -> services, group as one button, urgent + other last", acts.map((a) => a.label).join() === "ขูดหินปูน,รักษาราก,จัดฟัน,ครอบฟัน / ทำฟันปลอม,มีอาการปวด / บวม / ครอบฟันหลุด,บริการอื่น ๆ / ติดต่อแอดมิน" && acts.at(-1).type === "message" && acts.at(-1).text === "ขอแอดมิน (นัดบริการอื่น)", acts.map((a) => a.label).join(","));
+check("booking text -> services, group as one button, other last", acts.map((a) => a.label).join() === "ขูดหินปูน,รักษาราก,จัดฟัน,ครอบฟัน / ทำฟันปลอม,บริการอื่น ๆ / ติดต่อแอดมิน" && acts.at(-1).type === "message" && acts.at(-1).text === "ขอแอดมิน (นัดบริการอื่น)", acts.map((a) => a.label).join(","));
 const sameButtons = (m) => m?.type === "flex" && !m.quickReply && cardActions(m).length > 0;
-check("services card: big buttons only, no quick reply", sameButtons(r.msg) && cardActions(r.msg).length === 6);
-check("urgent button is red, sends its text", r.msg.contents.footer.contents.at(-2).color === "#DC2626" && acts.at(-2).type === "message" && acts.at(-2).text === "มีอาการปวด / บวม / ครอบฟันหลุด");
+check("services card: big buttons only, no quick reply", sameButtons(r.msg) && cardActions(r.msg).length === 5);
+check("no urgent button on the service card (owner removed it)", !acts.some((a) => a.text === "มีอาการปวด / บวม / ครอบฟันหลุด"));
 {
   const before = pushes.length;
   const other = await text(acts.at(-1).text, "Uother");
@@ -296,7 +296,7 @@ check("urgent button is red, sends its text", r.msg.contents.footer.contents.at(
   check("other service button -> handoff card + admin sees why", other.msg?.altText && other.msg.type === "flex" && JSON.stringify(notice ?? "").includes("ขอแอดมิน (นัดบริการอื่น)"), JSON.stringify(notice).slice(0, 160));
   const beforeUrgent = pushes.length;
   const g0 = geminiCalls;
-  const urgent = await text(acts.at(-2).text, "Uurgent");
+  const urgent = await text("มีอาการปวด / บวม / ครอบฟันหลุด", "Uurgent");
   const urgentNotice = JSON.stringify(pushes.slice(beforeUrgent).at(-1)?.messages[0] ?? "");
   check("urgent button -> handoff card + admin told to call back, no booking, no Gemini", urgent.msg?.type === "flex" && urgentNotice.includes("อาการเร่งด่วน (ปวด / บวม / ครอบฟันหลุด) โปรดติดต่อกลับโดยเร็ว") && geminiCalls === g0 && !live().some((e) => e.extendedProperties?.private?.lineUserId === "Uurgent"), urgentNotice.slice(0, 200));
 }

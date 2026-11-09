@@ -32,7 +32,7 @@ import {
   withCardNote,
 } from "./flex-cards";
 import type { Slots } from "./gemini";
-import { notifyAdmin, URGENT_BUTTON_TEXT } from "./handoff";
+import { notifyAdmin } from "./handoff";
 import { getLineClient } from "./line";
 import { findDn } from "./patients";
 import { MONTH_SHORT, parseDateText, parsePeriod, parseTimeText } from "./thai-datetime";
@@ -344,9 +344,9 @@ async function askService(prefill: Prefill = {}, only?: Service[], note = ""): P
   const message = choices(
     `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร ${CLINIC_PHONE} ได้เลยค่ะ 🦷`,
     [
-      ...entries.slice(0, MAX_QUICK_REPLIES - 2),
+      ...entries.slice(0, MAX_QUICK_REPLIES - 1),
       // ส่งเป็นข้อความ จึงเข้าคำสั่งตรง: การ์ดติดต่อกลับ + แจ้งแอดมิน ไม่เข้าการจองปกติ
-      { label: URGENT_BUTTON_TEXT, data: "", displayText: URGENT_BUTTON_TEXT, message: true, urgent: true },
+      // ปุ่มแดงอาการเร่งด่วนเอาออกแล้ว (เจ้าของสั่ง) คำสั่งใน handoff.ts ยังรับการ์ดเก่าที่ค้างในแชต
       { label: OTHER_SERVICE_LABEL, data: "", displayText: OTHER_SERVICE_TEXT, message: true },
     ],
   );
