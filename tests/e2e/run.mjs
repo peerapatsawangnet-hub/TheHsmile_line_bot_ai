@@ -41,13 +41,14 @@ let insertRival = null;
 let createdClock = Date.now();
 // จัดฟัน: self-pay only; ครอบฟัน + สะพานฟัน share a group (one button, then a sub-card); ครอบฟัน has a booking note
 let servicesCsv = [
-  "service,duration_minutes,active,needs_doctor,accepts_rights,group,booking_note",
+  "service,duration_minutes,active,needs_doctor,accepts_rights,group,booking_note,min_days_ahead",
   "ขูดหินปูน,15,TRUE,FALSE,,,",
   "รักษาราก,60,,,,,",
   "จัดฟัน,30,TRUE,FALSE,FALSE,,",
   "ครอบฟัน,60,TRUE,FALSE,FALSE,ครอบฟัน / ทำฟันปลอม,ทันตแพทย์จะตรวจประเมินก่อนทำครอบฟันนะคะ",
-  "สะพานฟัน,60,TRUE,FALSE,FALSE,ครอบฟัน / ทำฟันปลอม,",
-  "ปิดอยู่,15,FALSE,,,,",
+  "สะพานฟัน,60,TRUE,FALSE,FALSE,ครอบฟัน / ทำฟันปลอม,,",
+  "ฟอกสีฟัน ZOOM,60,TRUE,FALSE,FALSE,,มัดจำ 5000 บาท,7",
+  "ปิดอยู่,15,FALSE,,,,,",
 ].join("\n") + "\n";
 // settings tab unreachable until the extra suite checks the cold-start fallback
 let settingsDown = true;
@@ -285,9 +286,9 @@ const seed = (date, hhmm, min, extra = {}) => {
 
 let r = await text("อยากจองคิวค่ะ");
 let acts = items(r.msg);
-check("booking text -> services, group as one button, other last", acts.map((a) => a.label).join() === "ขูดหินปูน,รักษาราก,จัดฟัน,ครอบฟัน / ทำฟันปลอม,บริการอื่น ๆ / ติดต่อแอดมิน" && acts.at(-1).type === "message" && acts.at(-1).text === "ขอแอดมิน (นัดบริการอื่น)", acts.map((a) => a.label).join(","));
+check("booking text -> services, group as one button, other last", acts.map((a) => a.label).join() === "ขูดหินปูน,รักษาราก,จัดฟัน,ครอบฟัน / ทำฟันปลอม,ฟอกสีฟัน ZOOM,บริการอื่น ๆ / ติดต่อแอดมิน" && acts.at(-1).type === "message" && acts.at(-1).text === "ขอแอดมิน (นัดบริการอื่น)", acts.map((a) => a.label).join(","));
 const sameButtons = (m) => m?.type === "flex" && !m.quickReply && cardActions(m).length > 0;
-check("services card: big buttons only, no quick reply", sameButtons(r.msg) && cardActions(r.msg).length === 5);
+check("services card: big buttons only, no quick reply", sameButtons(r.msg) && cardActions(r.msg).length === 6);
 check("no urgent button on the service card (owner removed it)", !acts.some((a) => a.text === "มีอาการปวด / บวม / ครอบฟันหลุด"));
 {
   const before = pushes.length;
@@ -316,6 +317,13 @@ check("no urgent button on the service card (owner removed it)", !acts.some((a) 
   check("นัด + service name -> dates of that service, no Gemini", n.msg?.text === "ต้องการนัดวันไหนคะ" && items(n.msg).every((a) => a.label === "วันถัดไป ›" || new URLSearchParams(a.data).get("s") === "รักษาราก") && geminiCalls === g0, n.msg?.text);
   n = await text("จองคิว ครอบฟัน / ทำฟันปลอม", "Unamed");
   check("จองคิว + group name -> that group's card", n.msg?.text?.startsWith("ครอบฟัน / ทำฟันปลอม\n") && geminiCalls === g0, n.msg?.text);
+  // min_days_ahead: ZOOM whitening only from 7 days out, told why, and no way around it with an early slot
+  n = await text("นัดฟอกสีฟัน ZOOM", "Uzoom");
+  const zoomDays = items(n.msg).filter((a) => a.label !== "วันถัดไป ›").map((a) => new URLSearchParams(a.data).get("d"));
+  check("min_days_ahead -> note + no date before day 7", n.msg?.text === "บริการฟอกสีฟัน ZOOMชำระเองค่ะ ใช้สิทธิบัตรทองหรือประกันสังคมไม่ได้นะคะ\nบริการฟอกสีฟัน ZOOMต้องจองล่วงหน้าอย่างน้อย 7 วันค่ะ\nต้องการนัดวันไหนคะ" && zoomDays.length > 0 && zoomDays.every((d) => d >= dayFromNow(7)), `${n.msg?.text} | ${zoomDays[0]}`);
+  const early = [2, 3, 4, 5, 6].map((i) => dayFromNow(i)).find((d) => weekdayOf(d) !== 3 && d !== closedTue);
+  n = await pb(`a=slot&s=ฟอกสีฟัน ZOOM&d=${early}&p=pm&t=${14 * 60}`, user("Uzoom"));
+  check("min_days_ahead -> early slot postback holds nothing", !live().some((e) => e.extendedProperties?.private?.lineUserId === "Uzoom") && n.msg?.text?.includes("คิวเต็มแล้วค่ะ"), n.msg?.text);
 }
 
 // self-pay only service: told at once, rights never asked, right fixed to ชำระเอง on every button

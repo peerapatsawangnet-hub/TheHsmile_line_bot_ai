@@ -5,6 +5,7 @@ import { SHEET_CACHE_MS, SHEET_TIMEOUT_MS } from "./config";
 // acceptsRights: ใช้สิทธิ สปสช และประกันสังคมได้ ค่าว่างถือว่าใช้ได้ FALSE คือชำระเองเท่านั้น
 // group: บริการที่ใส่กลุ่มเดียวกันรวมเป็นปุ่มเดียวบนการ์ดแรก กดแล้วจึงเลือกบริการในกลุ่ม ว่างคือปุ่มของตัวเอง
 // bookingNote: ข้อความที่ต่อท้ายข้อความ "ส่งคำขอนัด…" เฉพาะบริการนี้ ว่างคือไม่ต่อ
+// minDaysAhead: ต้องจองล่วงหน้าอย่างน้อยกี่วัน เช่น ฟอกสีฟัน ZOOM 7 ว่างคือ 0 (ใช้แค่เกณฑ์ 1 ชั่วโมงเดิม)
 export type Service = {
   name: string;
   minutes: number;
@@ -12,6 +13,7 @@ export type Service = {
   acceptsRights: boolean;
   group: string;
   bookingNote: string;
+  minDaysAhead: number;
 };
 export type TimeRange = { open: number; close: number };
 export type BookingHours = {
@@ -77,6 +79,7 @@ export async function getServices(): Promise<Service[]> {
       acceptsRights: row.accepts_rights?.trim().toUpperCase() !== "FALSE",
       group: row.group?.trim() ?? "",
       bookingNote: row.booking_note?.trim() ?? "",
+      minDaysAhead: Math.max(0, Math.floor(Number(row.min_days_ahead?.trim() || 0)) || 0),
     }];
   });
 }

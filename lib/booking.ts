@@ -355,6 +355,9 @@ async function askService(prefill: Prefill = {}, only?: Service[], note = ""): P
 
 const inBookingWindow = (date: string, now: number) => date >= dateAt(now, 0) && date <= dateAt(now, BOOKING_DAYS_AHEAD);
 
+// วันแรกที่จองบริการนี้ได้ ตามคอลัมน์ min_days_ahead (เช่น ฟอกสีฟัน ZOOM ล่วงหน้า 7 วัน)
+const earliestDate = (service: Service, now: number) => dateAt(now, service.minDaysAhead);
+
 // บริการที่ยังจองวันนั้นได้: มีเวลาว่างอย่างน้อยหนึ่งเวลา และคุณหมอเข้าถ้าบริการต้องใช้คุณหมอ
 async function openOnDate(services: Service[], date: string, now: number): Promise<Service[]> {
   const ranges = rangesFor(date, await getBookingHours());
@@ -366,7 +369,9 @@ async function openOnDate(services: Service[], date: string, now: number): Promi
   ]);
   const doctorIn = !allowed || allowed.has(date);
   return services.filter((service) =>
-    (!service.needsDoctor || doctorIn) && freeSlots(date, ranges, service.minutes, events, now).length > 0);
+    date >= earliestDate(service, now) &&
+    (!service.needsDoctor || doctorIn) &&
+    freeSlots(date, ranges, service.minutes, events, now).length > 0);
 }
 
 // ลูกค้าถามคิวว่างของวันหนึ่ง: ให้เลือกเฉพาะบริการที่ยังจองวันนั้นได้ แล้วไปขั้นเลือกช่วงของวันนั้นเลย
@@ -379,7 +384,9 @@ async function askServiceForDate(services: Service[], prefill: Prefill, date: st
   if (open.length === 0) {
     return askService({ right: prefill.right }, undefined, `${day} ไม่มีคิวว่างค่ะ`);
   }
-  const missing = open.length < services.length ? `บริการที่ไม่อยู่ในปุ่มด้านล่าง ${day} คิวเต็มหรือคุณหมอไม่เข้าค่ะ` : "";
+  const missing = open.length < services.length
+    ? `บริการที่ไม่อยู่ในปุ่มด้านล่าง ${day} คิวเต็ม คุณหมอไม่เข้า หรือต้องจองล่วงหน้ามากกว่านี้ค่ะ`
+    : "";
   return askService(prefill, open, missing);
 }
 
@@ -483,7 +490,7 @@ async function askDate(
   ]);
 
   const items: ChoiceButton[] = [];
-  for (let i = 0; i <= BOOKING_DAYS_AHEAD; i++) {
+  for (let i = service.minDaysAhead; i <= BOOKING_DAYS_AHEAD; i++) {
     const date = dateAt(now, i);
     if (date < from) continue;
     if (allowed && !allowed.has(date)) continue;
@@ -502,8 +509,9 @@ async function askDate(
       text: `ขออภัยค่ะ ช่วง ${BOOKING_DAYS_AHEAD} วันนี้คิว${service.name}เต็ม กรุณาโทร ${CLINIC_PHONE} นะคะ 🙏`,
     };
   }
+  let page = items;
   if (items.length > MAX_QUICK_REPLIES) {
-    const page = items.slice(0, MAX_QUICK_REPLIES - 1);
+    page = items.slice(0, MAX_QUICK_REPLIES - 1);
     const next = new URLSearchParams(items[page.length].data).get("d") ?? "";
     page.push({
       label: "วันถัดไป ›",
@@ -511,12 +519,17 @@ async function askDate(
       displayText: "ดูวันถัดไป",
       secondary: true,
     });
-    return choices("ต้องการนัดวันไหนคะ", page, 2);
   }
-  return choices("ต้องการนัดวันไหนคะ", items, 2);
+  const card = choices("ต้องการนัดวันไหนคะ", page, 2);
+  // บอกเหตุผลที่วันใกล้ ๆ ไม่ขึ้น เฉพาะหน้าแรก
+  return service.minDaysAhead > 0 && !from
+    ? withPrefix(`บริการ${service.name}ต้องจองล่วงหน้าอย่างน้อย ${service.minDaysAhead} วันค่ะ`, card)
+    : card;
 }
 
+// ทุกทางที่จะกันคิว (ปุ่ม ข้อความที่บอกวันมา เลื่อนนัด) ผ่านที่นี่ จึงกันวันที่เร็วกว่า min_days_ahead ได้ทั้งหมด
 async function slotsForDate(service: Service, date: string, now: number): Promise<number[]> {
+  if (date < earliestDate(service, now)) return [];
   const ranges = rangesFor(date, await getBookingHours());
   if (ranges.length === 0) return [];
   const [events, allowed] = await Promise.all([
