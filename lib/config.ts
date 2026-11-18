@@ -31,8 +31,10 @@ export const CALENDAR_COLOR_CONFIRMED = "3";    // Grape: ม่วง คนไ
 export const CLINIC_PHONE = "062 038 9777";
 export const CLINIC_PHONE_URI = "tel:0620389777";
 export const HANDOFF_REPLY = "ขอแอดมินติดต่อกลับนะคะ 🙏";
+export const HANDOFF_REPLY_EN = "Our staff will get back to you shortly 🙏";
 // ข้อความตายตัว ไม่ผ่าน Gemini
 export const THANKS_REPLY = "ยินดีค่ะ หากต้องการข้อมูลเพิ่มเติมเร่งด่วน โทร 0620389777 ค่ะ";
+export const THANKS_REPLY_EN = "You're welcome! For anything urgent, please call 062 038 9777.";
 
 // ถามเวลานัดหรือวันคุณหมอเข้า: อ่าน Calendar ไม่ทันในเวลานี้ ให้เงียบและแจ้งแอดมิน
 export const LOOKUP_TIMEOUT_MS = 3_000;

@@ -34,6 +34,7 @@ import {
 import type { Slots } from "./gemini";
 import { notifyAdmin } from "./handoff";
 import { getLineClient } from "./line";
+import { currentLang, isEn, parseLang, tr, withLang } from "./i18n";
 import { findDn } from "./patients";
 import { MONTH_SHORT, parseDateText, parsePeriod, parseTimeText } from "./thai-datetime";
 
@@ -48,28 +49,35 @@ const MAX_NAME_LENGTH = 100;
 const SUGGESTED_TIMES = 2;
 const PENDING_PREFIX = "[รอแอดมิน] ";
 
-const BOOKING_TRIGGERS = ["จองคิว", "จองนัด", "ขอนัด", "อยากนัด", "นัดหมอ", "นัดหมาย", "book appointment"];
+const BOOKING_TRIGGERS = ["จองคิว", "จองนัด", "ขอนัด", "อยากนัด", "นัดหมอ", "นัดหมาย", "book appointment", "book an appointment", "make an appointment"];
 // ok/no: ยืนยันหรือปฏิเสธนัดและคำขอเลื่อนนัด cx/ck: ยืนยันยกเลิกนัดหรือไม่ยกเลิก
 const ADMIN_ACTIONS = new Set(["ok", "no", "cx", "ck"]);
 const CANCEL_PREFIX = "[ขอยกเลิก] ";
-const OTHER_SERVICE_LABEL = "บริการอื่น ๆ / ติดต่อแอดมิน";
-// แอดมินเห็นข้อความนี้ในกลุ่ม จึงรู้ว่าลูกค้าอยากนัดบริการที่ไม่มีในปุ่ม
-const OTHER_SERVICE_TEXT = "ขอแอดมิน (นัดบริการอื่น)";
+const otherServiceLabel = () => tr("บริการอื่น ๆ / ติดต่อแอดมิน", "Other service / talk to staff");
+// แอดมินเห็นข้อความนี้ในกลุ่ม จึงรู้ว่าลูกค้าอยากนัดบริการที่ไม่มีในปุ่ม ทั้งสองแบบเข้าคำสั่งติดต่อแอดมิน
+const otherServiceText = () => tr("ขอแอดมิน (นัดบริการอื่น)", "talk to staff (other service)");
 
-const RIGHTS: Record<string, { label: string; summary: string }> = {
-  gold: { label: "สปสช (สิทธิบัตรทอง)", summary: "สปสช" },
-  sso: { label: "ประกันสังคม", summary: "ประกันสังคม" },
-  self: { label: "ชำระเอง", summary: "ชำระเอง" },
+// label/labelEn คือปุ่มที่ลูกค้าเห็น summary คือคำในชื่อนัดและการ์ดแอดมิน (ภาษาไทยเสมอ)
+type Choice = { label: string; labelEn: string };
+const RIGHTS: Record<string, Choice & { summary: string }> = {
+  gold: { label: "สปสช (สิทธิบัตรทอง)", labelEn: "Gold Card (UCS)", summary: "สปสช" },
+  sso: { label: "ประกันสังคม", labelEn: "Social Security", summary: "ประกันสังคม" },
+  self: { label: "ชำระเอง", labelEn: "Self-pay", summary: "ชำระเอง" },
 };
-const VISITS: Record<string, { label: string; summary: string }> = {
-  old: { label: "เคยมาแล้ว", summary: "เคยมาแล้ว" },
-  new: { label: "มาครั้งแรก", summary: "คนไข้ใหม่" },
+const VISITS: Record<string, Choice & { summary: string }> = {
+  old: { label: "เคยมาแล้ว", labelEn: "I've been here before", summary: "เคยมาแล้ว" },
+  new: { label: "มาครั้งแรก", labelEn: "First visit", summary: "คนไข้ใหม่" },
 };
-const PERIODS: Record<string, { label: string; from: number; to: number }> = {
-  am: { label: "ช่วงเช้า", from: 0, to: 12 * 60 },
-  pm: { label: "ช่วงบ่าย", from: 12 * 60, to: 16 * 60 },
-  eve: { label: "ช่วงเย็น", from: 16 * 60, to: 24 * 60 },
+const PERIODS: Record<string, Choice & { from: number; to: number }> = {
+  am: { label: "ช่วงเช้า", labelEn: "Morning", from: 0, to: 12 * 60 },
+  pm: { label: "ช่วงบ่าย", labelEn: "Afternoon", from: 12 * 60, to: 16 * 60 },
+  eve: { label: "ช่วงเย็น", labelEn: "Evening", from: 16 * 60, to: 24 * 60 },
 };
+const label = (choice: Choice) => tr(choice.label, choice.labelEn);
+// ชื่อบริการและหมวดที่ลูกค้าเห็น ข้อมูลใน postback และชื่อนัดยังเป็นชื่อไทยใน Sheet
+const serviceLabel = (service: Service) => (isEn() && service.nameEn) || service.name;
+const groupLabel = (services: Service[], group: string) =>
+  (isEn() && services.find((service) => service.group === group && service.groupEn)?.groupEn) || group;
 const COVERAGES: Record<string, string> = { สปสช: "gold", ประกันสังคม: "sso", ชำระเอง: "self" };
 
 // ข้อมูลที่ลูกค้าบอกมาแล้วในข้อความแรก ส่งต่อไปกับปุ่มทุกขั้นจนถึงขั้นที่ใช้
@@ -111,17 +119,22 @@ export function dateAt(now: number, daysAhead: number): string {
   return new Date(now + OFFSET_MS + daysAhead * DAY_MS).toISOString().slice(0, 10);
 }
 
+// ภาษาอังกฤษ: "Saturday 21 Nov"
 export function formatDate(value: string): string {
-  return new Intl.DateTimeFormat("th-TH", {
+  return new Intl.DateTimeFormat(isEn() ? "en-GB" : "th-TH", {
     timeZone: "Asia/Bangkok",
     weekday: "long",
     day: "numeric",
     month: "short",
-  }).format(new Date(value));
+  }).format(new Date(value)).replace(",", "");
 }
 
 // ป้ายปุ่ม quick reply ยาวได้ไม่เกิน 20 ตัวอักษร
 function shortDate(value: string): string {
+  if (isEn()) {
+    return new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", weekday: "short", day: "numeric", month: "short" })
+      .format(new Date(value)).replace(",", "");
+  }
   return formatDate(value).replace(/^วัน/, "").replace("ที่ ", " ");
 }
 
@@ -135,8 +148,11 @@ function formatTime(value: string): string {
 }
 
 export function formatWhen(startIso: string): string {
-  return `${formatDate(startIso)} เวลา ${formatTime(startIso)} น.`;
+  return tr(`${formatDate(startIso)} เวลา ${formatTime(startIso)} น.`, `${formatDate(startIso)} at ${formatTime(startIso)}`);
 }
+
+// การ์ดและชื่อนัดฝั่งแอดมินเป็นภาษาไทยเสมอ แม้ลูกค้าใช้ภาษาอังกฤษ
+const formatWhenTh = (startIso: string) => withLang("th", () => formatWhen(startIso));
 
 function rangesFor(date: string, hours: BookingHours): TimeRange[] {
   return hours.dates[date] ?? hours.weekly[new Date(`${date}T00:00:00Z`).getUTCDay()] ?? [];
@@ -199,8 +215,9 @@ function choices(text: string, items: ChoiceButton[], columns = 1): Message {
 }
 
 // ไม่ encode ภาษาไทย เพราะ postback data ยาวได้ไม่เกิน 300 ตัวอักษร
-function postbackData(params: Record<string, string>): string {
-  return Object.entries(params)
+// ลูกค้าภาษาอังกฤษ: ทุกปุ่มพก l=en ขั้นถัดไปจึงตอบภาษาเดิมโดยไม่ต้องจำ
+export function postbackData(params: Record<string, string>): string {
+  return Object.entries({ ...params, ...(isEn() ? { l: "en" } : {}) })
     .map(([key, value]) => `${key}=${value.replace(/[&=%+]/g, encodeURIComponent)}`)
     .join("&");
 }
@@ -315,9 +332,20 @@ export async function findUserEvents(key: string, userId: string, now: number): 
 
 function existingBookingMessage(event: CalendarEvent): Message {
   // ส่งเป็นข้อความ จึงเข้าคำสั่งตรงเดียวกับที่ลูกค้าพิมพ์เอง
+  const when = formatWhen(event.start?.dateTime ?? "");
   return choices(
-    `คุณลูกค้ามีนัดอยู่แล้ว${formatWhen(event.start?.dateTime ?? "")} ค่ะ หากต้องการเปลี่ยนแปลง พิมพ์ "เปลี่ยนนัด" หรือโทร ${CLINIC_PHONE} ได้เลยนะคะ`,
-    ["เลื่อนนัด", "ยกเลิกนัด"].map((label, i) => ({ label, data: "", displayText: label, message: true, secondary: i > 0 })),
+    tr(
+      `คุณลูกค้ามีนัดอยู่แล้ว${when} ค่ะ หากต้องการเปลี่ยนแปลง พิมพ์ "เปลี่ยนนัด" หรือโทร ${CLINIC_PHONE} ได้เลยนะคะ`,
+      `You already have an appointment on ${when}. To change it, tap a button below or call ${CLINIC_PHONE}.`,
+    ),
+    // ส่งเป็นข้อความคำสั่ง (ไทยหรืออังกฤษ ตามภาษาลูกค้า) จึงเข้าคำสั่งเลื่อน/ยกเลิกนัดเดียวกับที่พิมพ์เอง
+    [["เลื่อนนัด", "Reschedule"], ["ยกเลิกนัด", "Cancel appointment"]].map(([command, en], i) => ({
+      label: tr(command, en),
+      data: "",
+      displayText: tr(command, en),
+      message: true,
+      secondary: i > 0,
+    })),
   );
 }
 
@@ -333,21 +361,27 @@ async function askService(prefill: Prefill = {}, only?: Service[], note = ""): P
   // บริการที่มี group เดียวกันรวมเป็นปุ่มเดียว อยู่ตำแหน่งของบริการแรกในกลุ่ม
   const entries: ChoiceButton[] = [];
   const groups = new Set<string>();
-  for (const { name, group } of services) {
+  for (const service of services) {
+    const { name, group } = service;
     if (!group) {
-      entries.push({ label: name, data: postbackData({ a: "svc", s: name, ...prefillParams(prefill) }), displayText: name });
+      const shown = serviceLabel(service);
+      entries.push({ label: shown, data: postbackData({ a: "svc", s: name, ...prefillParams(prefill) }), displayText: shown });
     } else if (!groups.has(group)) {
       groups.add(group);
-      entries.push({ label: group, data: postbackData({ a: "grp", g: group, ...prefillParams(prefill) }), displayText: group });
+      const shown = groupLabel(services, group);
+      entries.push({ label: shown, data: postbackData({ a: "grp", g: group, ...prefillParams(prefill) }), displayText: shown });
     }
   }
   const message = choices(
-    `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร ${CLINIC_PHONE} ได้เลยค่ะ 🦷`,
+    tr(
+      `ต้องการนัดบริการใดคะ หากไม่พบบริการที่ต้องการ พิมพ์ "ขอแอดมิน" หรือโทร ${CLINIC_PHONE} ได้เลยค่ะ 🦷`,
+      `Which service would you like to book? If you can't find it, tap "Other service" or call ${CLINIC_PHONE} 🦷`,
+    ),
     [
       ...entries.slice(0, MAX_QUICK_REPLIES - 1),
       // ส่งเป็นข้อความ จึงเข้าคำสั่งตรง: การ์ดติดต่อกลับ + แจ้งแอดมิน ไม่เข้าการจองปกติ
       // ปุ่มแดงอาการเร่งด่วนเอาออกแล้ว (เจ้าของสั่ง) คำสั่งใน handoff.ts ยังรับการ์ดเก่าที่ค้างในแชต
-      { label: OTHER_SERVICE_LABEL, data: "", displayText: OTHER_SERVICE_TEXT, message: true },
+      { label: otherServiceLabel(), data: "", displayText: otherServiceText(), message: true },
     ],
   );
   return note ? withPrefix(note, message) : message;
@@ -382,10 +416,13 @@ async function askServiceForDate(services: Service[], prefill: Prefill, date: st
   const day = formatDate(`${date}T12:00:00${OFFSET}`);
   const open = await openOnDate(services, date, now);
   if (open.length === 0) {
-    return askService({ right: prefill.right }, undefined, `${day} ไม่มีคิวว่างค่ะ`);
+    return askService({ right: prefill.right }, undefined, tr(`${day} ไม่มีคิวว่างค่ะ`, `Sorry, ${day} is fully booked.`));
   }
   const missing = open.length < services.length
-    ? `บริการที่ไม่อยู่ในปุ่มด้านล่าง ${day} คิวเต็ม คุณหมอไม่เข้า หรือต้องจองล่วงหน้ามากกว่านี้ค่ะ`
+    ? tr(
+      `บริการที่ไม่อยู่ในปุ่มด้านล่าง ${day} คิวเต็ม คุณหมอไม่เข้า หรือต้องจองล่วงหน้ามากกว่านี้ค่ะ`,
+      `Services not listed below are fully booked on ${day}, or need to be booked further ahead.`,
+    )
     : "";
   return askService(prefill, open, missing);
 }
@@ -397,15 +434,26 @@ async function askGroup(group: string, prefill: Prefill, now: number): Promise<M
   const open = prefill.date && inBookingWindow(prefill.date, now) ? await openOnDate(all, prefill.date, now) : all;
   const services = open.length > 0 ? open : all;
   return withPrefix(
-    group,
-    choices("สนใจรับบริการประเภทใดคะ กรุณาเลือกบริการที่ต้องการ หากไม่แน่ใจสามารถให้ทันตแพทย์ตรวจประเมินก่อนได้ค่ะ 🦷", [
-      ...services.slice(0, MAX_QUICK_REPLIES - 1).map(({ name }) => ({
-        label: name,
-        data: postbackData({ a: "svc", s: name, ...prefillParams(prefill) }),
-        displayText: name,
-      })),
-      { label: "‹ บริการอื่น", data: postbackData({ a: "svcs", ...prefillParams(prefill) }), displayText: "ดูบริการอื่น", secondary: true },
-    ]),
+    groupLabel(all, group),
+    choices(
+      tr(
+        "สนใจรับบริการประเภทใดคะ กรุณาเลือกบริการที่ต้องการ หากไม่แน่ใจสามารถให้ทันตแพทย์ตรวจประเมินก่อนได้ค่ะ 🦷",
+        "Which treatment are you interested in? If you're not sure, the dentist can examine you first 🦷",
+      ),
+      [
+        ...services.slice(0, MAX_QUICK_REPLIES - 1).map((service) => ({
+          label: serviceLabel(service),
+          data: postbackData({ a: "svc", s: service.name, ...prefillParams(prefill) }),
+          displayText: serviceLabel(service),
+        })),
+        {
+          label: tr("‹ บริการอื่น", "‹ Other services"),
+          data: postbackData({ a: "svcs", ...prefillParams(prefill) }),
+          displayText: tr("ดูบริการอื่น", "Other services"),
+          secondary: true,
+        },
+      ],
+    ),
   );
 }
 
@@ -415,7 +463,10 @@ async function askGroup(group: string, prefill: Prefill, now: number): Promise<M
 async function continueAfterService(service: Service, prefill: Prefill, userId: string, now: number): Promise<Message> {
   if (!service.acceptsRights) {
     return withPrefix(
-      `บริการ${service.name}ชำระเองค่ะ ใช้สิทธิบัตรทองหรือประกันสังคมไม่ได้นะคะ`,
+      tr(
+        `บริการ${service.name}ชำระเองค่ะ ใช้สิทธิบัตรทองหรือประกันสังคมไม่ได้นะคะ`,
+        `${serviceLabel(service)} is self-pay. Gold Card and Social Security can't be used for this service.`,
+      ),
       await continueToTime(service, "self", prefill, userId, now),
     );
   }
@@ -435,10 +486,8 @@ async function continueToTime(
   if (!date) return askDate(service, right, "", now);
   const slots = inRange ? await slotsForDate(service, date, now) : [];
   if (slots.length === 0) {
-    return withPrefix(
-      `${formatDate(`${date}T12:00:00${OFFSET}`)} ไม่มีคิวว่างค่ะ`,
-      await askDate(service, right, "", now),
-    );
+    const day = formatDate(`${date}T12:00:00${OFFSET}`);
+    return withPrefix(tr(`${day} ไม่มีคิวว่างค่ะ`, `Sorry, ${day} is fully booked.`), await askDate(service, right, "", now));
   }
   if (start !== undefined && slots.includes(start)) {
     return holdSlot(service, right, date, periodOf(start), start, userId, now);
@@ -450,13 +499,13 @@ async function continueToTime(
 // ถามหลังกันคิวแล้ว ปุ่มอ้างถึงคิวที่กันไว้ (e) จึงไม่ต้องพกข้อมูลขั้นก่อนหน้า
 function rightsCard(eventId: string, when: string): Message {
   return withPrefix(
-    `กันคิว${when} ไว้ให้แล้วค่ะ`,
+    tr(`กันคิว${when} ไว้ให้แล้วค่ะ`, `We're holding ${when} for you.`),
     choices(
-      "ใช้สิทธิการรักษาแบบไหนคะ",
-      Object.entries(RIGHTS).map(([code, { label }]) => ({
-        label,
+      tr("ใช้สิทธิการรักษาแบบไหนคะ", "How will you pay for this treatment?"),
+      Object.entries(RIGHTS).map(([code, choice]) => ({
+        label: label(choice),
         data: postbackData({ a: "hr", e: eventId, r: code }),
-        displayText: label,
+        displayText: label(choice),
       })),
     ),
   );
@@ -464,11 +513,11 @@ function rightsCard(eventId: string, when: string): Message {
 
 function visitCard(eventId: string): Message {
   return choices(
-    "เคยมาที่คลินิกแล้วหรือมาครั้งแรกคะ",
-    Object.entries(VISITS).map(([code, { label }]) => ({
-      label,
+    tr("เคยมาที่คลินิกแล้วหรือมาครั้งแรกคะ", "Have you visited our clinic before?"),
+    Object.entries(VISITS).map(([code, choice]) => ({
+      label: label(choice),
       data: postbackData({ a: "hv", e: eventId, v: code }),
-      displayText: label,
+      displayText: label(choice),
     })),
   );
 }
@@ -506,7 +555,10 @@ async function askDate(
   if (items.length === 0) {
     return {
       type: "text",
-      text: `ขออภัยค่ะ ช่วง ${BOOKING_DAYS_AHEAD} วันนี้คิว${service.name}เต็ม กรุณาโทร ${CLINIC_PHONE} นะคะ 🙏`,
+      text: tr(
+        `ขออภัยค่ะ ช่วง ${BOOKING_DAYS_AHEAD} วันนี้คิว${service.name}เต็ม กรุณาโทร ${CLINIC_PHONE} นะคะ 🙏`,
+        `Sorry, ${serviceLabel(service)} is fully booked for the next ${BOOKING_DAYS_AHEAD} days. Please call ${CLINIC_PHONE} 🙏`,
+      ),
     };
   }
   let page = items;
@@ -514,16 +566,22 @@ async function askDate(
     page = items.slice(0, MAX_QUICK_REPLIES - 1);
     const next = new URLSearchParams(items[page.length].data).get("d") ?? "";
     page.push({
-      label: "วันถัดไป ›",
+      label: tr("วันถัดไป ›", "More dates ›"),
       data: postbackData({ a: "dates", ...flowParams(service, right, visit, replaces), f: next }),
-      displayText: "ดูวันถัดไป",
+      displayText: tr("ดูวันถัดไป", "More dates"),
       secondary: true,
     });
   }
-  const card = choices("ต้องการนัดวันไหนคะ", page, 2);
+  const card = choices(tr("ต้องการนัดวันไหนคะ", "Which day would you like?"), page, 2);
   // บอกเหตุผลที่วันใกล้ ๆ ไม่ขึ้น เฉพาะหน้าแรก
   return service.minDaysAhead > 0 && !from
-    ? withPrefix(`บริการ${service.name}ต้องจองล่วงหน้าอย่างน้อย ${service.minDaysAhead} วันค่ะ`, card)
+    ? withPrefix(
+      tr(
+        `บริการ${service.name}ต้องจองล่วงหน้าอย่างน้อย ${service.minDaysAhead} วันค่ะ`,
+        `${serviceLabel(service)} must be booked at least ${service.minDaysAhead} days ahead.`,
+      ),
+      card,
+    )
     : card;
 }
 
@@ -550,20 +608,22 @@ async function askPeriod(
 ): Promise<Message> {
   const slots = await slotsForDate(service, date, now);
   if (slots.length === 0) {
-    return withPrefix("วันนี้คิวเต็มแล้วค่ะ", await askDate(service, right, visit, now, "", replaces));
+    return withPrefix(tr("วันนี้คิวเต็มแล้วค่ะ", "Sorry, that day is now fully booked."), await askDate(service, right, visit, now, "", replaces));
   }
 
   const params = flowParams(service, right, visit, replaces);
   const items: ChoiceButton[] = Object.entries(PERIODS)
     .filter(([, { from, to }]) => slots.some((start) => start >= from && start < to))
-    .map(([code, { label }]) => ({
-      label,
+    .map(([code, choice]) => ({
+      label: label(choice),
       data: postbackData({ a: "period", ...params, d: date, p: code }),
-      displayText: label,
+      displayText: label(choice),
     }));
   // ลูกค้าที่ถามวันมาเอง (ข้ามการ์ดเลือกวัน) ต้องมีทางเปลี่ยนวันได้
-  items.push({ label: "เลือกวันอื่น", data: postbackData({ a: "dates", ...params }), displayText: "เลือกวันอื่น", secondary: true });
-  return choices(`${formatDate(`${date}T12:00:00${OFFSET}`)} สะดวกช่วงไหนคะ`, items);
+  const otherDay = tr("เลือกวันอื่น", "Another day");
+  items.push({ label: otherDay, data: postbackData({ a: "dates", ...params }), displayText: otherDay, secondary: true });
+  const day = formatDate(`${date}T12:00:00${OFFSET}`);
+  return choices(tr(`${day} สะดวกช่วงไหนคะ`, `What time of day suits you on ${day}?`), items);
 }
 
 async function askTime(
@@ -576,41 +636,55 @@ async function askTime(
   replaces = "",
   all = false,
 ): Promise<Message> {
-  const { from, to, label } = PERIODS[period] ?? PERIODS.am;
+  const periodChoice = PERIODS[period] ?? PERIODS.am;
+  const { from, to } = periodChoice;
   const daySlots = await slotsForDate(service, date, now);
   const slots = daySlots.filter((start) => start >= from && start < to);
   if (slots.length === 0) {
-    return withPrefix("ช่วงนี้คิวเต็มแล้วค่ะ", await askPeriod(service, right, visit, date, now, replaces));
+    return withPrefix(
+      tr("ช่วงนี้คิวเต็มแล้วค่ะ", "Sorry, that part of the day is now fully booked."),
+      await askPeriod(service, right, visit, date, now, replaces),
+    );
   }
 
   const params = flowParams(service, right, visit, replaces);
   const buttons = (times: number[]): ChoiceButton[] => times.map((start) => ({
     label: clock(start),
     data: postbackData({ a: "slot", ...params, d: date, p: period, t: String(start) }),
-    displayText: `${clock(start)} น.`,
+    displayText: tr(`${clock(start)} น.`, clock(start)),
   }));
   // ลูกค้าพิมพ์ "แล้วช่วงเย็นล่ะ" บอทไม่รู้ว่ากำลังจองวันไหน (ไม่มีที่เก็บสถานะ) จึงต้องมีปุ่มกลับไปเลือกช่วง
   const otherPeriod = daySlots.some((start) => start < from || start >= to);
+  const otherPeriodLabel = tr("เลือกช่วงอื่น", "Another time of day");
   const back: ChoiceButton[] = otherPeriod
-    ? [{ label: "เลือกช่วงอื่น", data: postbackData({ a: "date", ...params, d: date }), displayText: "เลือกช่วงอื่น", secondary: true }]
+    ? [{ label: otherPeriodLabel, data: postbackData({ a: "date", ...params, d: date }), displayText: otherPeriodLabel, secondary: true }]
     : [];
-  const note = `${label}${formatDate(`${date}T12:00:00${OFFSET}`)} ยังมีคิวว่างค่ะ`;
+  const day = formatDate(`${date}T12:00:00${OFFSET}`);
+  const note = tr(`${periodChoice.label}${day} ยังมีคิวว่างค่ะ`, `We have openings on ${day} (${periodChoice.labelEn.toLowerCase()}).`);
   if (all || slots.length <= SUGGESTED_TIMES) {
-    const list = choices("ต้องการเวลาไหนคะ", [...buttons(slots.slice(0, MAX_QUICK_REPLIES - back.length)), ...back], 3);
+    const list = choices(
+      tr("ต้องการเวลาไหนคะ", "Which time would you like?"),
+      [...buttons(slots.slice(0, MAX_QUICK_REPLIES - back.length)), ...back],
+      3,
+    );
     return all ? list : withPrefix(note, list);
   }
 
   // เสนอเวลาว่างที่เร็วที่สุดก่อน ช่วยเติมคิวต้นช่วงและให้ลูกค้าตัดสินใจเร็ว
+  const moreTimes = tr("ดูเวลาอื่น", "Other times");
   return withPrefix(
     note,
     choices(
-      `แนะนำ ${SUGGESTED_TIMES} เวลานี้ค่ะ หากไม่สะดวก กดดูเวลาอื่นได้เลยนะคะ`,
+      tr(
+        `แนะนำ ${SUGGESTED_TIMES} เวลานี้ค่ะ หากไม่สะดวก กดดูเวลาอื่นได้เลยนะคะ`,
+        `Here are the ${SUGGESTED_TIMES} earliest times. If neither suits you, tap "Other times".`,
+      ),
       [
         ...buttons(slots.slice(0, SUGGESTED_TIMES)),
         {
-          label: "ดูเวลาอื่น",
+          label: moreTimes,
           data: postbackData({ a: "times", ...params, d: date, p: period }),
-          displayText: "ดูเวลาอื่น",
+          displayText: moreTimes,
           secondary: true,
         },
         ...back,
@@ -651,7 +725,7 @@ async function holdSlot(
   const right = !service.acceptsRights ? "self" : RIGHTS[chosenRight] ? chosenRight : "";
   const slots = await slotsForDate(service, date, now);
   if (!slots.includes(start)) {
-    return withPrefix("เวลานี้คิวเต็มแล้วค่ะ", await askTime(service, right, "", date, period, now));
+    return withPrefix(slotTakenNote(), await askTime(service, right, "", date, period, now));
   }
 
   const startIso = toIso(date, start);
@@ -670,18 +744,22 @@ async function holdSlot(
         holdUntil: String(now + BOOKING_HOLD_MINUTES * MINUTE_MS),
         service: service.name,
         ...(right ? { right } : {}),
+        // ภาษาของลูกค้า ใช้ตอนกรอกชื่อ แจ้งผลยืนยัน และเตือนนัด
+        ...(isEn() ? { lang: "en" } : {}),
       },
     },
   });
 
   if (await lostRace(event, startMs, service.minutes, now)) {
     await deleteEvent(event.id);
-    return withPrefix("เวลานี้คิวเต็มแล้วค่ะ", await askTime(service, right, "", date, period, now));
+    return withPrefix(slotTakenNote(), await askTime(service, right, "", date, period, now));
   }
   await Promise.all(holds.map(({ id }) => deleteEvent(id)));
 
   return nextHoldStep(event);
 }
+
+const slotTakenNote = () => tr("เวลานี้คิวเต็มแล้วค่ะ", "Sorry, that time was just taken.");
 
 const isHold = (event: CalendarEvent) => Boolean(event.extendedProperties?.private?.awaitingDetailsFor);
 
@@ -696,7 +774,7 @@ function serviceFromEvent(event: CalendarEvent): Service | null {
   const name = event.extendedProperties?.private?.service;
   const minutes = (Date.parse(event.end?.dateTime ?? "") - Date.parse(event.start?.dateTime ?? "")) / MINUTE_MS;
   if (!name || !(minutes > 0)) return null;
-  return { name, minutes, needsDoctor: true, acceptsRights: true, group: "", bookingNote: "", minDaysAhead: 0 };
+  return { name, minutes, needsDoctor: true, acceptsRights: true, group: "", bookingNote: "", minDaysAhead: 0, nameEn: "", groupEn: "", bookingNoteEn: "" };
 }
 
 type PrivateProps = Record<string, string | null>;
@@ -719,7 +797,10 @@ async function updateHold(event: CalendarEvent, extra: PrivateProps): Promise<Ca
 function detailsPrompt(when: string): Message {
   return {
     type: "text",
-    text: `เจ้าหน้าที่จะบันทึกการนัดหมาย ${when} นะคะ กรุณาพิมพ์ชื่อ-นามสกุล และเบอร์โทรของผู้เข้ารับการรักษาในข้อความเดียว เช่น สมชาย ใจดี 0812345678\nหากไม่ต้องการจองแล้ว พิมพ์ "ยกเลิก" ได้เลยค่ะ`,
+    text: tr(
+      `เจ้าหน้าที่จะบันทึกการนัดหมาย ${when} นะคะ กรุณาพิมพ์ชื่อ-นามสกุล และเบอร์โทรของผู้เข้ารับการรักษาในข้อความเดียว เช่น สมชาย ใจดี 0812345678\nหากไม่ต้องการจองแล้ว พิมพ์ "ยกเลิก" ได้เลยค่ะ`,
+      `We'll book you in for ${when}. Please type the patient's full name and phone number in one message, e.g. John Smith 0812345678\nTo stop booking, type "cancel".`,
+    ),
   };
 }
 
@@ -740,15 +821,15 @@ async function saveDetails(event: CalendarEvent, details: { name: string; phone:
 }
 
 function coverageIn(text: string): string | undefined {
-  if (/บัตรทอง|สปสช|30\s*บาท/.test(text)) return "gold";
-  if (/ประกันสังคม/.test(text)) return "sso";
-  if (/ชำระเอง|จ่ายเอง/.test(text)) return "self";
+  if (/บัตรทอง|สปสช|30\s*บาท|gold card|\bucs\b/i.test(text)) return "gold";
+  if (/ประกันสังคม|social security|\bsso\b/i.test(text)) return "sso";
+  if (/ชำระเอง|จ่ายเอง|self[- ]?pay|pay myself/i.test(text)) return "self";
   return undefined;
 }
 
 function visitIn(text: string): string | undefined {
-  if (/ครั้งแรก|ไม่เคย|คนไข้ใหม่/.test(text)) return "new";
-  if (/เคยมา|คนไข้เก่า/.test(text)) return "old";
+  if (/ครั้งแรก|ไม่เคย|คนไข้ใหม่|first (?:time|visit)|new patient|never/i.test(text)) return "new";
+  if (/เคยมา|คนไข้เก่า|been (?:here|there) before|returning|visited before/i.test(text)) return "old";
   return undefined;
 }
 
@@ -757,7 +838,13 @@ async function answerHold(action: string, params: URLSearchParams, userId: strin
   const event = await getEvent(params.get("e") ?? "");
   const props = event?.extendedProperties?.private ?? {};
   if (!event || event.status === "cancelled" || props.awaitingDetailsFor !== userId || isExpiredHold(event, Date.now())) {
-    return { type: "text", text: `คิวที่กันไว้หมดเวลาแล้วค่ะ พิมพ์ "จองคิว" เพื่อเลือกเวลาใหม่ได้เลยนะคะ` };
+    return {
+      type: "text",
+      text: tr(
+        `คิวที่กันไว้หมดเวลาแล้วค่ะ พิมพ์ "จองคิว" เพื่อเลือกเวลาใหม่ได้เลยนะคะ`,
+        `The time we held for you has expired. Type "book appointment" to choose a new time.`,
+      ),
+    };
   }
   const right = params.get("r") ?? "";
   const visit = params.get("v") ?? "";
@@ -783,13 +870,15 @@ function requestNotice(
 
 function parseDetails(text: string): { name: string; phone: string } | null {
   const clean = text.replace(/\s+/g, " ").trim();
-  const match = clean.match(/(?<!\d)0\d(?:[ -]?\d){7,8}(?!\d)/);
+  // เบอร์ไทย 0xxxxxxxxx หรือเบอร์ต่างประเทศที่ขึ้นต้นด้วย + (ลูกค้าต่างชาติ)
+  const match = clean.match(/(?<!\d)0\d(?:[ -]?\d){7,8}(?!\d)/) ?? clean.match(/\+\d(?:[ -]?\d){7,14}(?!\d)/);
   if (!match) return null;
-  const phone = match[0].replace(/\D/g, "");
+  const phone = match[0].startsWith("+") ? `+${match[0].replace(/\D/g, "")}` : match[0].replace(/\D/g, "");
   // ลูกค้าอาจพิมพ์สิทธิมาพร้อมชื่อ เช่น "ประกันสังคม สมใจ ทดสอบ 08…" (coverageIn อ่านสิทธิแยกไว้แล้ว)
   const name = clean
     .replace(match[0], " ")
     .replace(/เบอร์|ชื่อ|สิทธิ(?:บัตรทอง)?|บัตรทอง|สปสช\.?|ประกันสังคม|ชำระเอง|จ่ายเอง/g, " ")
+    .replace(/\b(?:name|phone|tel|mobile|gold card|social security|self[- ]?pay)\b:?/gi, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, MAX_NAME_LENGTH);
@@ -811,16 +900,23 @@ async function completeBooking(event: CalendarEvent): Promise<Message> {
     extendedProperties: { private: { awaitingDetailsFor: null, holdUntil: null, name: null, phone: null, dn: null } },
   });
 
-  const when = formatWhen(event.start?.dateTime ?? "");
+  const start = event.start?.dateTime ?? "";
   // ส่งไม่สำเร็จก็ไม่เป็นไร นัดอยู่ใน Calendar แล้ว ทีมยังเห็นจากปฏิทินได้
-  await sendToAdmin(requestNotice("🗓️ คำขอนัดใหม่", summary, when, bookingActions(event.id)), "booking_notify_failed");
+  // การ์ดแอดมินเป็นภาษาไทยเสมอ 🇬🇧 บอกว่าลูกค้าใช้ภาษาอังกฤษ ควรติดต่อกลับเป็นภาษาอังกฤษ
+  const title = `🗓️ คำขอนัดใหม่${props.lang === "en" ? " 🇬🇧" : ""}`;
+  await sendToAdmin(requestNotice(title, summary, formatWhenTh(start), bookingActions(event.id)), "booking_notify_failed");
 
   console.log(JSON.stringify({ tag: "booking_created" }));
   // ข้อความเฉพาะบริการจากคอลัมน์ booking_note อ่านไม่ได้ก็ส่งข้อความปกติ นัดบันทึกไปแล้ว
-  const note = (await getServices().catch(() => [])).find(({ name }) => name === service)?.bookingNote;
+  const row = (await getServices().catch(() => [])).find(({ name }) => name === service);
+  const note = isEn() ? row?.bookingNoteEn : row?.bookingNote;
+  const when = formatWhen(start);
   return {
     type: "text",
-    text: `ส่งคำขอนัด${service} ${when} แล้วค่ะ แอดมินจะยืนยันนัดให้อีกครั้งนะคะ 🙏${note ? `\n${note}` : ""}`,
+    text: tr(
+      `ส่งคำขอนัด${service} ${when} แล้วค่ะ แอดมินจะยืนยันนัดให้อีกครั้งนะคะ 🙏`,
+      `Your request for ${(row && serviceLabel(row)) || service} on ${when} has been sent. Our staff will confirm it shortly 🙏`,
+    ) + (note ? `\n${note}` : ""),
   };
 }
 
@@ -830,28 +926,33 @@ export async function handleBookingDetails(userId: string | undefined, text: str
   try {
     const [event] = await findUserEvents("awaitingDetailsFor", userId, Date.now());
     if (!event) return null;
-
-    if (text.trim() === "ยกเลิก") {
-      await deleteEvent(event.id);
-      return { type: "text", text: "ยกเลิกการจองคิวแล้วค่ะ 🙏" };
-    }
-
-    // ลูกค้าพิมพ์คำตอบแทนการกดปุ่มได้ทุกขั้น เช่น "ประกันสังคม" หรือ "มาครั้งแรก"
+    // ตอบภาษาเดียวกับตอนกันคิว แม้ลูกค้าพิมพ์ชื่อเป็นอักษรไทย
     const props = event.extendedProperties?.private ?? {};
-    const coverage = coverageIn(text);
-    const details = props.name ? null : parseDetails(text);
-    const visit = props.name ? visitIn(text) : undefined;
-    let current = event;
-    if (coverage && !RIGHTS[props.right ?? ""]) current = await updateHold(current, { right: coverage });
-    if (details) current = await saveDetails(current, details);
-    if (visit) current = await updateHold(current, { visit });
-    if (current !== event) return await nextHoldStep(current);
+    return await withLang(props.lang === "en" ? "en" : currentLang(), async (): Promise<Message> => {
+      if (/^(?:ยกเลิก|cancel)$/i.test(text.trim())) {
+        await deleteEvent(event.id);
+        return { type: "text", text: tr("ยกเลิกการจองคิวแล้วค่ะ 🙏", "Your booking has been cancelled 🙏") };
+      }
 
-    if (!RIGHTS[props.right ?? ""] || props.name) return await nextHoldStep(event);
-    return {
-      type: "text",
-      text: `รบกวนพิมพ์ชื่อ-นามสกุล และเบอร์โทรในข้อความเดียวนะคะ เช่น สมชาย ใจดี 0812345678 หากไม่ต้องการจองแล้ว พิมพ์ "ยกเลิก" ได้เลยค่ะ`,
-    };
+      // ลูกค้าพิมพ์คำตอบแทนการกดปุ่มได้ทุกขั้น เช่น "ประกันสังคม" หรือ "มาครั้งแรก"
+      const coverage = coverageIn(text);
+      const details = props.name ? null : parseDetails(text);
+      const visit = props.name ? visitIn(text) : undefined;
+      let current = event;
+      if (coverage && !RIGHTS[props.right ?? ""]) current = await updateHold(current, { right: coverage });
+      if (details) current = await saveDetails(current, details);
+      if (visit) current = await updateHold(current, { visit });
+      if (current !== event) return await nextHoldStep(current);
+
+      if (!RIGHTS[props.right ?? ""] || props.name) return await nextHoldStep(event);
+      return {
+        type: "text",
+        text: tr(
+          `รบกวนพิมพ์ชื่อ-นามสกุล และเบอร์โทรในข้อความเดียวนะคะ เช่น สมชาย ใจดี 0812345678 หากไม่ต้องการจองแล้ว พิมพ์ "ยกเลิก" ได้เลยค่ะ`,
+          `Please type the patient's full name and phone number in one message, e.g. John Smith 0812345678. To stop booking, type "cancel".`,
+        ),
+      };
+    });
   } catch (err) {
     logBookingError(err);
     return null;
@@ -897,7 +998,10 @@ export async function startBooking(userId: string | undefined, text: string, slo
 function pendingRescheduleMessage(event: CalendarEvent): Message {
   return {
     type: "text",
-    text: `คุณลูกค้ามีคำขอเลื่อนนัดเป็น${formatWhen(event.start?.dateTime ?? "")} รอแอดมินยืนยันอยู่ค่ะ หากต้องการเปลี่ยนแปลง โทร ${CLINIC_PHONE} ได้เลยนะคะ`,
+    text: tr(
+      `คุณลูกค้ามีคำขอเลื่อนนัดเป็น${formatWhen(event.start?.dateTime ?? "")} รอแอดมินยืนยันอยู่ค่ะ หากต้องการเปลี่ยนแปลง โทร ${CLINIC_PHONE} ได้เลยนะคะ`,
+      `You have a request to move your appointment to ${formatWhen(event.start?.dateTime ?? "")} waiting for staff to confirm. To change it, call ${CLINIC_PHONE}.`,
+    ),
   };
 }
 
@@ -927,8 +1031,12 @@ export async function startReschedule(userId: string | undefined): Promise<Messa
     const service = (await getServices()).find(({ name }) => name === props.service) ?? serviceFromEvent(original);
     if (!service) return null;
 
+    const when = formatWhen(original.start?.dateTime ?? "");
     return withPrefix(
-      `นัดเดิมของคุณคือ${formatWhen(original.start?.dateTime ?? "")} ค่ะ เลือกวันใหม่ได้เลยนะคะ หากต้องการให้แอดมินช่วย พิมพ์ "ขอแอดมิน" ได้เลยค่ะ`,
+      tr(
+        `นัดเดิมของคุณคือ${when} ค่ะ เลือกวันใหม่ได้เลยนะคะ หากต้องการให้แอดมินช่วย พิมพ์ "ขอแอดมิน" ได้เลยค่ะ`,
+        `Your current appointment is ${when}. Choose a new day below. If you need help, type "talk to staff".`,
+      ),
       await askDate(service, props.right ?? "", props.visit ?? "", now, "", original.id),
     );
   } catch (err) {
@@ -945,9 +1053,19 @@ async function restartHold(userId: string, now: number): Promise<Message | null>
   const props = hold.extendedProperties?.private ?? {};
   const service = (await getServices()).find(({ name }) => name === props.service) ?? serviceFromEvent(hold);
   await Promise.all(holds.map(({ id }) => deleteEvent(id)));
-  const released = `ยกเลิกคิว${formatWhen(hold.start?.dateTime ?? "")} ที่ยังจองไม่เสร็จให้แล้วค่ะ`;
-  if (!service) return withPrefix(released, await askService());
-  return withPrefix(`${released} เลือกวันใหม่ได้เลยนะคะ`, await askDate(service, RIGHTS[props.right ?? ""] ? props.right ?? "" : "", "", now));
+  const when = formatWhen(hold.start?.dateTime ?? "");
+  if (!service) {
+    return withPrefix(tr(`ยกเลิกคิว${when} ที่ยังจองไม่เสร็จให้แล้วค่ะ`, `We've released the unfinished booking for ${when}.`), await askService());
+  }
+  return withPrefix(
+    tr(`ยกเลิกคิว${when} ที่ยังจองไม่เสร็จให้แล้วค่ะ เลือกวันใหม่ได้เลยนะคะ`, `We've released the unfinished booking for ${when}. Choose a new day below.`),
+    await askDate(service, RIGHTS[props.right ?? ""] ? props.right ?? "" : "", "", now),
+  );
+}
+
+// ข้อความถึงลูกค้าที่ส่งจากฝั่งแอดมินหรือ cron ใช้ภาษาที่ลูกค้าจองไว้
+function inEventLang<T>(event: CalendarEvent, fn: () => T): T {
+  return withLang(parseLang(event.extendedProperties?.private?.lang), fn);
 }
 
 const cleanTitle = (summary: string | undefined) => (summary ?? "").replace(CANCEL_PREFIX, "").replace(PENDING_PREFIX, "");
@@ -955,7 +1073,10 @@ const cleanTitle = (summary: string | undefined) => (summary ?? "").replace(CANC
 function pendingCancelMessage(event: CalendarEvent): Message {
   return {
     type: "text",
-    text: `คุณลูกค้ามีคำขอยกเลิกนัด${formatWhen(event.start?.dateTime ?? "")} รอแอดมินยืนยันอยู่ค่ะ`,
+    text: tr(
+      `คุณลูกค้ามีคำขอยกเลิกนัด${formatWhen(event.start?.dateTime ?? "")} รอแอดมินยืนยันอยู่ค่ะ`,
+      `Your request to cancel the appointment on ${formatWhen(event.start?.dateTime ?? "")} is waiting for staff to confirm.`,
+    ),
   };
 }
 
@@ -972,12 +1093,16 @@ export async function startCancel(userId: string | undefined): Promise<Message |
       const { holds } = await userEvents(userId, now);
       if (holds.length === 0) return null;
       await Promise.all(holds.map(({ id }) => deleteEvent(id)));
-      return { type: "text", text: `ยกเลิกคิว${formatWhen(holds[0].start?.dateTime ?? "")} ที่ยังจองไม่เสร็จให้แล้วค่ะ 🙏` };
+      const when = formatWhen(holds[0].start?.dateTime ?? "");
+      return { type: "text", text: tr(`ยกเลิกคิว${when} ที่ยังจองไม่เสร็จให้แล้วค่ะ 🙏`, `We've released the unfinished booking for ${when} 🙏`) };
     }
     if (event.extendedProperties?.private?.cancelRequested) return pendingCancelMessage(event);
-    return choices(`ต้องการยกเลิกนัด${formatWhen(event.start?.dateTime ?? "")} ใช่ไหมคะ`, [
-      { label: "ยกเลิกนัด", data: postbackData({ a: "cancel", e: event.id }), displayText: "ยกเลิกนัด" },
-      { label: "ไม่ยกเลิก", data: postbackData({ a: "keep", e: event.id }), displayText: "ไม่ยกเลิก", secondary: true },
+    const when = formatWhen(event.start?.dateTime ?? "");
+    const yes = tr("ยกเลิกนัด", "Yes, cancel it");
+    const no = tr("ไม่ยกเลิก", "No, keep it");
+    return choices(tr(`ต้องการยกเลิกนัด${when} ใช่ไหมคะ`, `Do you want to cancel your appointment on ${when}?`), [
+      { label: yes, data: postbackData({ a: "cancel", e: event.id }), displayText: yes },
+      { label: no, data: postbackData({ a: "keep", e: event.id }), displayText: no, secondary: true },
     ]);
   } catch (err) {
     logBookingError(err);
@@ -995,10 +1120,10 @@ async function requestCancel(id: string, userId: string, keep: boolean): Promise
     event.extendedProperties?.private?.lineUserId !== userId ||
     Date.parse(start) <= Date.now()
   ) {
-    return { type: "text", text: `ไม่พบนัดนี้ค่ะ กรุณาโทร ${CLINIC_PHONE} นะคะ 🙏` };
+    return { type: "text", text: tr(`ไม่พบนัดนี้ค่ะ กรุณาโทร ${CLINIC_PHONE} นะคะ 🙏`, `We couldn't find this appointment. Please call ${CLINIC_PHONE} 🙏`) };
   }
   if (event.extendedProperties?.private?.cancelRequested) return pendingCancelMessage(event);
-  if (keep) return { type: "text", text: `นัดของคุณ${formatWhen(start)} ยังอยู่ค่ะ 😊` };
+  if (keep) return { type: "text", text: tr(`นัดของคุณ${formatWhen(start)} ยังอยู่ค่ะ 😊`, `Your appointment on ${formatWhen(start)} is kept 😊`) };
 
   const summary = cleanTitle(event.summary);
   await patchEvent(id, {
@@ -1006,14 +1131,14 @@ async function requestCancel(id: string, userId: string, keep: boolean): Promise
     extendedProperties: { private: { cancelRequested: "1" } },
   });
   await sendToAdmin(
-    requestNotice("🚫 ขอยกเลิกนัด", summary, formatWhen(start), [
+    requestNotice(`🚫 ขอยกเลิกนัด${isEn() ? " 🇬🇧" : ""}`, summary, formatWhenTh(start), [
       { label: "ยืนยันยกเลิก", data: `a=cx&e=${id}` },
       { label: "ไม่ยกเลิก", data: `a=ck&e=${id}` },
     ], ""),
     "booking_notify_failed",
   );
   console.log(JSON.stringify({ tag: "cancel_requested" }));
-  return { type: "text", text: "ส่งคำขอยกเลิกนัดแล้วค่ะ แอดมินจะยืนยันให้อีกครั้งนะคะ 🙏" };
+  return { type: "text", text: tr("ส่งคำขอยกเลิกนัดแล้วค่ะ แอดมินจะยืนยันให้อีกครั้งนะคะ 🙏", "Your cancellation request has been sent. Our staff will confirm it shortly 🙏") };
 }
 
 // ยืนยัน: ลบนัดแล้วแจ้งลูกค้า ไม่ยกเลิก: คืนชื่อนัดเดิม ไม่แจ้งลูกค้า ให้แอดมินคุยเอง
@@ -1029,7 +1154,13 @@ async function decideCancel(action: string, event: CalendarEvent | null, id: str
     await deleteEvent(id);
     const sent = await notifyCustomer(
       event.extendedProperties?.private?.lineUserId,
-      `ยกเลิกนัด${when} เรียบร้อยแล้วค่ะ หากต้องการนัดใหม่ พิมพ์ "จองคิว" ได้เลยนะคะ`,
+      inEventLang(event, () => {
+        const customerWhen = formatWhen(event.start?.dateTime ?? "");
+        return tr(
+          `ยกเลิกนัด${customerWhen} เรียบร้อยแล้วค่ะ หากต้องการนัดใหม่ พิมพ์ "จองคิว" ได้เลยนะคะ`,
+          `Your appointment on ${customerWhen} has been cancelled. To book again, type "book appointment".`,
+        );
+      }),
     );
     const failNote = sent ? "" : "\nแจ้งลูกค้าทาง LINE ไม่สำเร็จ กรุณาติดต่อลูกค้าเอง";
     return { type: "text", text: `🚫 ยกเลิกนัดแล้ว: ${summary}\n${when}${failNote}` };
@@ -1061,14 +1192,14 @@ async function requestReschedule(
     original.extendedProperties?.private?.lineUserId !== userId ||
     Date.parse(originalStart) <= now
   ) {
-    return { type: "text", text: `ไม่พบนัดเดิมค่ะ กรุณาโทร ${CLINIC_PHONE} นะคะ 🙏` };
+    return { type: "text", text: tr(`ไม่พบนัดเดิมค่ะ กรุณาโทร ${CLINIC_PHONE} นะคะ 🙏`, `We couldn't find your current appointment. Please call ${CLINIC_PHONE} 🙏`) };
   }
   const pending = (await upcomingBookings(userId, now)).find((event) => event.extendedProperties?.private?.replaces);
   if (pending) return pendingRescheduleMessage(pending);
 
   const slots = await slotsForDate(service, date, now);
   if (!slots.includes(start)) {
-    return withPrefix("เวลานี้คิวเต็มแล้วค่ะ", await askTime(service, right, visit, date, period, now, replaces));
+    return withPrefix(slotTakenNote(), await askTime(service, right, visit, date, period, now, replaces));
   }
 
   const startIso = toIso(date, start);
@@ -1082,23 +1213,29 @@ async function requestReschedule(
     start: { dateTime: startIso },
     end: { dateTime: new Date(startMs + service.minutes * MINUTE_MS).toISOString() },
     extendedProperties: {
-      private: { source: "line", lineUserId: userId, service: service.name, right, visit, replaces },
+      private: {
+        source: "line", lineUserId: userId, service: service.name, right, visit, replaces,
+        ...(isEn() ? { lang: "en" } : {}),
+      },
     },
   });
 
   if (await lostRace(event, startMs, service.minutes, now)) {
     await deleteEvent(event.id);
-    return withPrefix("เวลานี้คิวเต็มแล้วค่ะ", await askTime(service, right, visit, date, period, now, replaces));
+    return withPrefix(slotTakenNote(), await askTime(service, right, visit, date, period, now, replaces));
   }
 
-  const when = formatWhen(startIso);
-  const change = `จาก: ${formatWhen(originalStart)}\nเป็น: ${when}`;
-  await sendToAdmin(requestNotice("🔁 ขอเลื่อนนัด", summary, change, bookingActions(event.id)), "booking_notify_failed");
+  const change = `จาก: ${formatWhenTh(originalStart)}\nเป็น: ${formatWhenTh(startIso)}`;
+  await sendToAdmin(requestNotice(`🔁 ขอเลื่อนนัด${isEn() ? " 🇬🇧" : ""}`, summary, change, bookingActions(event.id)), "booking_notify_failed");
 
   console.log(JSON.stringify({ tag: "reschedule_requested" }));
+  const when = formatWhen(startIso);
   return {
     type: "text",
-    text: `ส่งคำขอเลื่อนนัดเป็น${when} แล้วค่ะ นัดเดิม${formatWhen(originalStart)} ยังอยู่จนกว่าแอดมินจะยืนยันนะคะ 🙏`,
+    text: tr(
+      `ส่งคำขอเลื่อนนัดเป็น${when} แล้วค่ะ นัดเดิม${formatWhen(originalStart)} ยังอยู่จนกว่าแอดมินจะยืนยันนะคะ 🙏`,
+      `Your request to move to ${when} has been sent. Your current appointment on ${formatWhen(originalStart)} stays until staff confirm 🙏`,
+    ),
   };
 }
 
@@ -1178,13 +1315,14 @@ export async function describeNextAppointment(userId: string, now: number): Prom
     })
     .sort((a, b) => Date.parse(a.start?.dateTime ?? "") - Date.parse(b.start?.dateTime ?? ""));
   if (!next) return null;
-  return `นัดของคุณคือ${formatWhen(next.start?.dateTime ?? "")} ค่ะ 😊`;
+  const when = formatWhen(next.start?.dateTime ?? "");
+  return tr(`นัดของคุณคือ${when} ค่ะ 😊`, `Your appointment is on ${when} 😊`);
 }
 
-// "4, 11 และ 18"
+// "4, 11 และ 18" / "4, 11 and 18"
 function dayList(days: string[]): string {
   const numbers = days.map((day) => String(Number(day.slice(8))));
-  return numbers.length > 1 ? `${numbers.slice(0, -1).join(", ")} และ ${numbers.at(-1)}` : numbers[0];
+  return numbers.length > 1 ? `${numbers.slice(0, -1).join(", ")} ${tr("และ", "and")} ${numbers.at(-1)}` : numbers[0];
 }
 
 // วันที่คุณหมอเข้าตั้งแต่วันนี้ถึงสิ้นเดือน คืน null เมื่อเดือนนั้นผ่านไปแล้ว
@@ -1194,10 +1332,13 @@ export async function describeDoctorDays(year: number, month: number, now: numbe
   const from = first < dateAt(now, 0) ? dateAt(now, 0) : first;
   if (from > last) return null;
   const monthName = `เดือน${MONTH_SHORT[month - 1]}`;
+  const monthEn = new Intl.DateTimeFormat("en-GB", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(year, month - 1, 1)));
 
   const [doctorDays, hours] = await Promise.all([listDoctorDays(toIso(from, 0), endOfDay(last)), getBookingHours()]);
   const inMonth = doctorDays.filter((day) => day >= from && day <= last);
-  if (inMonth.length > 0) return `${monthName} คุณหมอเข้าวันที่ ${dayList(inMonth)} ค่ะ 😊`;
+  if (inMonth.length > 0) {
+    return tr(`${monthName} คุณหมอเข้าวันที่ ${dayList(inMonth)} ค่ะ 😊`, `In ${monthEn}, the dentist is in on the ${dayList(inMonth)} 😊`);
+  }
 
   // ไม่ได้ลง event หมอเข้า: คุณหมอเข้าทุกวันที่คลินิกเปิด บอกวันปิดจากแท็บเวลาจองแทน
   const closed: string[] = [];
@@ -1205,8 +1346,11 @@ export async function describeDoctorDays(year: number, month: number, now: numbe
     if (rangesFor(day, hours).length === 0) closed.push(day);
   }
   return closed.length > 0
-    ? `${monthName} คุณหมอเข้าทุกวันที่คลินิกเปิด โดยคลินิกปิดวันที่ ${dayList(closed)} ค่ะ 😊`
-    : `${monthName} คุณหมอเข้าทุกวันค่ะ 😊`;
+    ? tr(
+      `${monthName} คุณหมอเข้าทุกวันที่คลินิกเปิด โดยคลินิกปิดวันที่ ${dayList(closed)} ค่ะ 😊`,
+      `In ${monthEn}, the dentist is in every day the clinic is open. The clinic is closed on the ${dayList(closed)} 😊`,
+    )
+    : tr(`${monthName} คุณหมอเข้าทุกวันค่ะ 😊`, `In ${monthEn}, the dentist is in every day 😊`);
 }
 
 async function notifyCustomer(userId: string | null | undefined, text: string): Promise<boolean> {
@@ -1235,7 +1379,7 @@ async function sendReminder(event: CalendarEvent): Promise<boolean> {
   try {
     await getLineClient().pushMessage({
       to: userId,
-      messages: [reminderCard(formatWhen(start), event.id)],
+      messages: [inEventLang(event, () => reminderCard(formatWhen(start), event.id))],
     });
   } catch (err) {
     console.error(JSON.stringify({
@@ -1283,20 +1427,20 @@ async function handleAttendance(id: string, userId: string | undefined): Promise
   try {
     const event = await getEvent(id);
     if (!event || event.status === "cancelled" || event.extendedProperties?.private?.lineUserId !== userId) {
-      return { type: "text", text: `ไม่พบนัดนี้ค่ะ กรุณาโทร ${CLINIC_PHONE} นะคะ 🙏` };
+      return { type: "text", text: tr(`ไม่พบนัดนี้ค่ะ กรุณาโทร ${CLINIC_PHONE} นะคะ 🙏`, `We couldn't find this appointment. Please call ${CLINIC_PHONE} 🙏`) };
     }
     const start = event.start?.dateTime ?? "";
     if (Date.parse(start) <= Date.now()) {
-      return { type: "text", text: "นัดนี้ผ่านไปแล้วค่ะ" };
+      return { type: "text", text: tr("นัดนี้ผ่านไปแล้วค่ะ", "This appointment has already passed.") };
     }
     if (event.colorId !== CALENDAR_COLOR_CONFIRMED) {
       await patchEvent(id, { colorId: CALENDAR_COLOR_CONFIRMED });
       console.log(JSON.stringify({ tag: "attendance_confirmed" }));
     }
-    return { type: "text", text: `ขอบคุณที่ยืนยันค่ะ พบกัน${formatWhen(start)} นะคะ 😊` };
+    return { type: "text", text: tr(`ขอบคุณที่ยืนยันค่ะ พบกัน${formatWhen(start)} นะคะ 😊`, `Thank you for confirming. See you on ${formatWhen(start)} 😊`) };
   } catch (err) {
     logBookingError(err);
-    return { type: "text", text: `ยืนยันไม่สำเร็จค่ะ กรุณาลองใหม่ หรือโทร ${CLINIC_PHONE} นะคะ 🙏` };
+    return { type: "text", text: tr(`ยืนยันไม่สำเร็จค่ะ กรุณาลองใหม่ หรือโทร ${CLINIC_PHONE} นะคะ 🙏`, `Sorry, we couldn't confirm. Please try again or call ${CLINIC_PHONE} 🙏`) };
   }
 }
 
@@ -1326,16 +1470,24 @@ async function decideReschedule(
       ? await sendReminder(event)
       : await notifyCustomer(
           userId,
-          `แอดมินยืนยันการเลื่อนนัดแล้วค่ะ นัดใหม่คือ${when} ก่อนวันนัดจะมีข้อความให้กดยืนยันอีกครั้งนะคะ 😊`,
+          inEventLang(event, () => tr(
+            `แอดมินยืนยันการเลื่อนนัดแล้วค่ะ นัดใหม่คือ${when} ก่อนวันนัดจะมีข้อความให้กดยืนยันอีกครั้งนะคะ 😊`,
+            `Your appointment has been moved to ${formatWhen(start)}. We'll send you a reminder the day before 😊`,
+          )),
         );
     return { type: "text", text: `✅ ยืนยันเลื่อนนัดแล้ว: ${summary}\nนัดใหม่ ${when} (ลบนัดเดิมแล้ว)${sent ? "" : failNote}` };
   }
 
   await deleteEvent(event.id);
-  const keep = originalLive ? ` นัดเดิม${formatWhen(original.start?.dateTime ?? "")} ยังอยู่นะคะ` : "";
   const sent = await notifyCustomer(
     userId,
-    `ขออภัยค่ะ เวลา${when} ไม่สะดวก${keep} หากต้องการเลื่อนเป็นเวลาอื่น พิมพ์ "เลื่อนนัด" หรือโทร ${CLINIC_PHONE} ได้เลยนะคะ 🙏`,
+    inEventLang(event, () => {
+      const keep = originalLive ? tr(` นัดเดิม${formatWhen(original.start?.dateTime ?? "")} ยังอยู่นะคะ`, ` Your appointment on ${formatWhen(original.start?.dateTime ?? "")} stays as it is.`) : "";
+      return tr(
+        `ขออภัยค่ะ เวลา${when} ไม่สะดวก${keep} หากต้องการเลื่อนเป็นเวลาอื่น พิมพ์ "เลื่อนนัด" หรือโทร ${CLINIC_PHONE} ได้เลยนะคะ 🙏`,
+        `Sorry, ${formatWhen(start)} is not available.${keep} To choose another time, type "reschedule" or call ${CLINIC_PHONE} 🙏`,
+      );
+    }),
   );
   return { type: "text", text: `❌ ปฏิเสธการเลื่อนนัด: ${summary}\n${when} (นัดเดิมยังอยู่)${sent ? "" : failNote}` };
 }
@@ -1371,7 +1523,10 @@ export async function handleAdminPostback(data: string): Promise<Message> {
         ? await sendReminder({ ...event, id })
         : await notifyCustomer(
             userId,
-            `แอดมินรับนัดเรียบร้อยแล้วค่ะ ${when} ก่อนวันนัดจะมีข้อความให้กดยืนยันอีกครั้งนะคะ 😊 หากต้องการเปลี่ยนแปลง พิมพ์ "เปลี่ยนนัด" ได้เลยค่ะ`,
+            inEventLang(event, () => tr(
+              `แอดมินรับนัดเรียบร้อยแล้วค่ะ ${when} ก่อนวันนัดจะมีข้อความให้กดยืนยันอีกครั้งนะคะ 😊 หากต้องการเปลี่ยนแปลง พิมพ์ "เปลี่ยนนัด" ได้เลยค่ะ`,
+              `Your appointment on ${formatWhen(start)} is confirmed. We'll send you a reminder the day before 😊 To change it, type "reschedule".`,
+            )),
           );
       return { type: "text", text: `✅ ยืนยันแล้ว: ${summary}\n${when}${sent ? "" : failNote}` };
     }
@@ -1379,7 +1534,10 @@ export async function handleAdminPostback(data: string): Promise<Message> {
     await deleteEvent(id);
     const sent = await notifyCustomer(
       userId,
-      `ขออภัยค่ะ คิว${when} ไม่สะดวก พิมพ์ "จองคิว" เพื่อเลือกเวลาใหม่ หรือโทร ${CLINIC_PHONE} ได้เลยนะคะ 🙏`,
+      inEventLang(event, () => tr(
+        `ขออภัยค่ะ คิว${when} ไม่สะดวก พิมพ์ "จองคิว" เพื่อเลือกเวลาใหม่ หรือโทร ${CLINIC_PHONE} ได้เลยนะคะ 🙏`,
+        `Sorry, ${formatWhen(start)} is not available. Type "book appointment" to choose a new time, or call ${CLINIC_PHONE} 🙏`,
+      )),
     );
     return { type: "text", text: `❌ ปฏิเสธแล้ว: ${summary}\n${when}${sent ? "" : failNote}` };
   } catch (err) {

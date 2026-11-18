@@ -23,7 +23,8 @@ LINE Official Account bot ของคลินิกทันตกรรม Th
 - `lib/config.ts`: ค่าคงที่และข้อความมาตรฐาน
 - `lib/sheet.ts`: ดึง กรอง และ cache FAQ
 - `lib/flex-cards.ts`, `lib/line.ts`: Flex Message และ LINE client
-- `rich-menu.json`, `scripts/install-rich-menu.mjs`: Rich Menu 6 ช่อง
+- `rich-menu.json` (ไทย, `rich-menu-th.jpg`), `rich-menu-en.json` (อังกฤษ, `rich-menu-en.jpg`), `scripts/install-rich-menu.mjs`: Rich Menu 6 ช่อง + แถบสลับภาษาด้านล่าง ติดตั้งด้วย API (ไทยเป็นเมนูเริ่มต้น อังกฤษผูกรายคน) ชื่อเมนูต้องตรงกับ `RICH_MENU_NAMES` ใน `lib/rich-menu.ts`
+- `lib/i18n.ts`, `lib/rich-menu.ts`: ภาษาอังกฤษ ภาษาของลูกค้าดูจาก Rich Menu ที่ LINE ผูกไว้ (พิมพ์/กด "English" ผูกเมนูอังกฤษ "ภาษาไทย" ถอดออก) หรือข้อความภาษาอังกฤษล้วนอย่างน้อยสองคำ (ตอบข้อความนั้นเป็นอังกฤษ) ภาษาเก็บใน AsyncLocalStorage ต่อ event ข้อความไทยเดิมไม่เปลี่ยน ภาษาอังกฤษเพิ่มคู่ด้วย `tr(th, en)` ปุ่มพก `l=en` คิวและนัดเก็บ private `lang` (กรอกชื่อ แจ้งผลยืนยัน เตือนนัด) ฝั่งแอดมินเป็นไทยเสมอ มี 🇬🇧 บอกว่าลูกค้าใช้ภาษาอังกฤษ แท็บบริการมี `service_en`, `group_en`, `booking_note_en` แท็บ FAQ มี `answer_en` (ไม่บังคับ ส่งตรงตัว ปุ่มเขียน `Type "คำไทย"` เป็น postback `a=faq`) ไม่มี `answer_en` ใช้คำตอบที่ Gemini แปล (ไม่มีปุ่ม)
 - `tests/*.test.ts` (`npm test`), `tests/intent-holdout.json` + `scripts/test-intents.ts`: ชุดทดสอบ
 - `tests/e2e/` (`npm run test:e2e`): build แล้วรันบอทจริงกับ mock ของ LINE, Gemini/Vertex, Calendar, Sheets, Telegram สองรอบ (กลุ่ม LINE + AI Studio และ Telegram + Vertex) ต้องผ่านทั้งหมดก่อน push โค้ดที่แตะ flow จอง แจ้งแอดมิน หรือ webhook
 - `docs/test-conversations.md`: บททดสอบบนมือถือก่อนปล่อยใช้งาน

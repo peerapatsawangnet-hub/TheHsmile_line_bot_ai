@@ -1,5 +1,6 @@
 import { messagingApi } from "@line/bot-sdk";
-import { BUTTON_COLOR, CLINIC_PHONE, CLINIC_PHONE_URI, HANDOFF_REPLY, URGENT_BUTTON_COLOR } from "./config";
+import { BUTTON_COLOR, CLINIC_PHONE, CLINIC_PHONE_URI, HANDOFF_REPLY, HANDOFF_REPLY_EN, URGENT_BUTTON_COLOR } from "./config";
+import { isEn, tr } from "./i18n";
 
 export const BOOKING_CARD_NOTE = "เติม HN หรือแก้เวลาใน Google Calendar ก่อนกดยืนยันได้ ลูกค้าจะได้รับเวลาล่าสุด";
 
@@ -45,10 +46,13 @@ export function bookingRequestCard(
   };
 }
 
+// ภาษาตามนัด (ผู้เรียกครอบด้วยภาษาของลูกค้า) ปุ่มยืนยันพก l=en ให้คำตอบหลังกดเป็นภาษาเดิม
 export function reminderCard(when: string, eventId: string): messagingApi.FlexMessage {
+  const confirm = tr("ยืนยันมาตามนัด", "I'll be there");
+  const change = tr("ขอเปลี่ยนนัด", "Reschedule");
   return {
     type: "flex",
-    altText: `แจ้งเตือนนัด ${when} กรุณากดยืนยันค่ะ`,
+    altText: tr(`แจ้งเตือนนัด ${when} กรุณากดยืนยันค่ะ`, `Appointment reminder: ${when}. Please confirm.`),
     contents: {
       type: "bubble",
       body: {
@@ -56,9 +60,9 @@ export function reminderCard(when: string, eventId: string): messagingApi.FlexMe
         layout: "vertical",
         spacing: "md",
         contents: [
-          { type: "text", text: "🦷 แจ้งเตือนนัดหมาย", weight: "bold", size: "lg" },
+          { type: "text", text: tr("🦷 แจ้งเตือนนัดหมาย", "🦷 Appointment reminder"), weight: "bold", size: "lg" },
           { type: "text", text: when, wrap: true },
-          { type: "text", text: "กรุณากดยืนยันว่าจะมาตามนัดนะคะ", wrap: true },
+          { type: "text", text: tr("กรุณากดยืนยันว่าจะมาตามนัดนะคะ", "Please confirm that you'll come."), wrap: true },
         ],
       },
       footer: {
@@ -70,12 +74,12 @@ export function reminderCard(when: string, eventId: string): messagingApi.FlexMe
             type: "button",
             style: "primary",
             color: BUTTON_COLOR,
-            action: { type: "postback", label: "ยืนยันมาตามนัด", data: `a=attend&e=${eventId}`, displayText: "ยืนยันมาตามนัด" },
+            action: { type: "postback", label: confirm, data: `a=attend&e=${eventId}${isEn() ? "&l=en" : ""}`, displayText: confirm },
           },
           {
             type: "button",
             style: "secondary",
-            action: { type: "message", label: "ขอเปลี่ยนนัด", text: "ขอเปลี่ยนนัด" },
+            action: { type: "message", label: change, text: change },
           },
         ],
       },
@@ -168,9 +172,10 @@ export function withCardNote(note: string, card: messagingApi.FlexMessage): mess
 }
 
 export function handoffCard(): messagingApi.FlexMessage {
+  const reply = tr(HANDOFF_REPLY, HANDOFF_REPLY_EN);
   return {
     type: "flex",
-    altText: HANDOFF_REPLY,
+    altText: reply,
     contents: {
       type: "bubble",
       body: {
@@ -178,8 +183,14 @@ export function handoffCard(): messagingApi.FlexMessage {
         layout: "vertical",
         spacing: "md",
         contents: [
-          { type: "text", text: HANDOFF_REPLY, wrap: true, weight: "bold" },
-          { type: "text", text: `หากเร่งด่วน โทรได้ที่ ${CLINIC_PHONE} ค่ะ`, wrap: true, size: "sm", color: "#666666" },
+          { type: "text", text: reply, wrap: true, weight: "bold" },
+          {
+            type: "text",
+            text: tr(`หากเร่งด่วน โทรได้ที่ ${CLINIC_PHONE} ค่ะ`, `If it's urgent, please call ${CLINIC_PHONE}.`),
+            wrap: true,
+            size: "sm",
+            color: "#666666",
+          },
         ],
       },
       footer: {
@@ -189,7 +200,7 @@ export function handoffCard(): messagingApi.FlexMessage {
           type: "button",
           style: "primary",
           color: BUTTON_COLOR,
-          action: { type: "uri", label: "โทรหาคลินิก", uri: CLINIC_PHONE_URI },
+          action: { type: "uri", label: tr("โทรหาคลินิก", "Call the clinic"), uri: CLINIC_PHONE_URI },
         }],
       },
     },

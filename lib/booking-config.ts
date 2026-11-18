@@ -14,6 +14,10 @@ export type Service = {
   group: string;
   bookingNote: string;
   minDaysAhead: number;
+  // ชื่อและข้อความภาษาอังกฤษ (service_en, group_en, booking_note_en) ว่างคือใช้ภาษาไทย / ไม่ต่อข้อความ
+  nameEn: string;
+  groupEn: string;
+  bookingNoteEn: string;
 };
 export type TimeRange = { open: number; close: number };
 export type BookingHours = {
@@ -80,6 +84,9 @@ export async function getServices(): Promise<Service[]> {
       group: row.group?.trim() ?? "",
       bookingNote: row.booking_note?.trim() ?? "",
       minDaysAhead: Math.max(0, Math.floor(Number(row.min_days_ahead?.trim() || 0)) || 0),
+      nameEn: row.service_en?.trim() ?? "",
+      groupEn: row.group_en?.trim() ?? "",
+      bookingNoteEn: row.booking_note_en?.trim() ?? "",
     }];
   });
 }

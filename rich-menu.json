@@ -1,32 +1,36 @@
 {
   "size": { "width": 2500, "height": 1686 },
   "selected": true,
-  "name": "The H Smile Main Menu",
+  "name": "The H Smile TH",
   "chatBarText": "เมนู",
   "areas": [
     {
-      "bounds": { "x": 0, "y": 0, "width": 833, "height": 843 },
+      "bounds": { "x": 0, "y": 0, "width": 833, "height": 750 },
       "action": { "type": "message", "text": "จองคิว" }
     },
     {
-      "bounds": { "x": 833, "y": 0, "width": 834, "height": 843 },
+      "bounds": { "x": 833, "y": 0, "width": 834, "height": 750 },
       "action": { "type": "message", "text": "มีบริการอะไรบ้าง" }
     },
     {
-      "bounds": { "x": 1667, "y": 0, "width": 833, "height": 843 },
-      "action": { "type": "message", "text": "รากฟันเทียมราคาเท่าไหร่" }
+      "bounds": { "x": 1667, "y": 0, "width": 833, "height": 750 },
+      "action": { "type": "message", "text": "รากฟันเทียม" }
     },
     {
-      "bounds": { "x": 0, "y": 843, "width": 833, "height": 843 },
+      "bounds": { "x": 0, "y": 750, "width": 833, "height": 750 },
       "action": { "type": "message", "text": "จัดฟันราคาเท่าไหร่" }
     },
     {
-      "bounds": { "x": 833, "y": 843, "width": 834, "height": 843 },
+      "bounds": { "x": 833, "y": 750, "width": 834, "height": 750 },
       "action": { "type": "uri", "uri": "https://maps.app.goo.gl/BodRpe3CZwpPtynVA" }
     },
     {
-      "bounds": { "x": 1667, "y": 843, "width": 833, "height": 843 },
+      "bounds": { "x": 1667, "y": 750, "width": 833, "height": 750 },
       "action": { "type": "uri", "uri": "tel:0620389777" }
+    },
+    {
+      "bounds": { "x": 0, "y": 1500, "width": 2500, "height": 186 },
+      "action": { "type": "message", "text": "English" }
     }
   ]
 }

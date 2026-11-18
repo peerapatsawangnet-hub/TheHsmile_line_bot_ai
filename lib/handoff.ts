@@ -1,3 +1,4 @@
+import { isEn } from "./i18n";
 import { isTelegramAdmin, sendToAdmin } from "./admin-channel";
 import { getLineClient } from "./line";
 
@@ -27,12 +28,14 @@ export function isAppointmentChangeCommand(message: string): boolean {
 }
 
 // เปลี่ยนหรือเลื่อนนัด ไม่รวมยกเลิก ลูกค้าเลือกเวลาใหม่เองได้ถ้านัดจองผ่าน LINE
+// ภาษาอังกฤษ: ปุ่มส่ง "Reschedule" / "Cancel appointment" (ปุ่มเตือนนัดและการ์ดมีนัดอยู่แล้ว)
 export function isRescheduleCommand(message: string): boolean {
-  return includesAny(message, ["เปลี่ยนนัด", "เลื่อนนัด"]) && !message.includes("ยกเลิก");
+  return (includesAny(message, ["เปลี่ยนนัด", "เลื่อนนัด"]) && !message.includes("ยกเลิก")) ||
+    /^\s*reschedule\b/i.test(message);
 }
 
 export function isCancelCommand(message: string): boolean {
-  return message.includes("ยกเลิกนัด");
+  return message.includes("ยกเลิกนัด") || /^\s*cancel (?:my |the )?appointment\b/i.test(message);
 }
 
 // ปุ่มสีแดงบนการ์ดเลือกบริการ ส่งข้อความนี้ตรงตัว: ไม่เข้าการจองปกติ ให้แอดมินประเมินความเร่งด่วนก่อน
@@ -67,13 +70,14 @@ function clip(message: string): string {
 export async function notifyAdmin(userId: string | undefined, reason: string, message: string): Promise<void> {
   const name = await getDisplayName(userId);
   await sendToAdmin({
-    text: `🔔 มีแชทรอแอดมินตอบ\nลูกค้า: ${name}\nเรื่อง: ${reason}\nข้อความ: ${clip(message)}\nตอบได้ที่: LINE OA Manager → แชท`,
+    // ลูกค้าภาษาอังกฤษ: บอกแอดมินให้ตอบเป็นภาษาอังกฤษ
+    text: `🔔 มีแชทรอแอดมินตอบ\nลูกค้า: ${name}${isEn() ? " 🇬🇧 (ตอบเป็นภาษาอังกฤษ)" : ""}\nเรื่อง: ${reason}\nข้อความ: ${clip(message)}\nตอบได้ที่: LINE OA Manager → แชท`,
   }, "admin_notify_failed");
 }
 
 export async function notifyEmergency(userId: string | undefined, message: string): Promise<void> {
   const name = await getDisplayName(userId);
-  const body = `🔴 ด่วน · อาการฉุกเฉิน\nลูกค้า: ${name}\nข้อความ: ${clip(message)}\nกรุณาติดต่อกลับทันที`;
+  const body = `🔴 ด่วน · อาการฉุกเฉิน\nลูกค้า: ${name}${isEn() ? " 🇬🇧" : ""}\nข้อความ: ${clip(message)}\nกรุณาติดต่อกลับทันที`;
   console.log(JSON.stringify({ tag: "emergency" }));
 
   // LINE: mention ทุกคนในกลุ่ม ถ้าไม่รับ textV2 ให้ส่งข้อความปกติแทน

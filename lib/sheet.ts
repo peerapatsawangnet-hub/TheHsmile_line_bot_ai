@@ -5,6 +5,8 @@ type FaqRow = {
   category?: string;
   question?: string;
   answer?: string;
+  // คำตอบภาษาอังกฤษที่คลินิกเขียนเอง (ไม่บังคับ) ว่างคือให้ Gemini แปลจาก answer
+  answer_en?: string;
   active?: string;
 };
 
@@ -29,10 +31,13 @@ function cleanCsv(raw: string): string | null {
       category: row.category?.trim() ?? "",
       question: row.question?.trim(),
       answer: row.answer?.trim(),
+      answer_en: row.answer_en?.trim() ?? "",
     }));
 
   if (rows.length === 0) return null;
-  return Papa.unparse(rows, { columns: ["category", "question", "answer"] });
+  // คอลัมน์ answer_en ใส่เฉพาะเมื่อมีแถวที่เขียนไว้ FAQ ที่ส่งให้ Gemini จึงเหมือนเดิมถ้ายังไม่ใช้
+  const hasEnglish = rows.some((row) => row.answer_en);
+  return Papa.unparse(rows, { columns: hasEnglish ? ["category", "question", "answer", "answer_en"] : ["category", "question", "answer"] });
 }
 
 async function fetchRawCsv(): Promise<string> {
@@ -51,7 +56,7 @@ const questionKey = (text: string) => text.toLowerCase().replace(/[\s"'“”‘
 
 // คำตอบจาก Sheet ของแถวที่คำถามตรงกัน ช่อง question มีได้หลายแบบคั่นด้วย /
 // เทียบได้ทั้งช่องทั้งหมด (Gemini คัดลอกมาทั้งช่อง) หรือแบบใดแบบหนึ่ง (ลูกค้าพิมพ์หรือกดปุ่ม)
-export function findFaqAnswer(faqCsv: string, question: string | undefined): string | null {
+export function findFaqRow(faqCsv: string, question: string | undefined): { answer: string; answerEn: string } | null {
   if (!question) return null;
   const { data } = Papa.parse<FaqRow>(faqCsv, { header: true, skipEmptyLines: true });
   const wanted = questionKey(question);
@@ -60,7 +65,13 @@ export function findFaqAnswer(faqCsv: string, question: string | undefined): str
     const cell = row.question ?? "";
     return questionKey(cell) === wanted || cell.split("/").some((variant) => questionKey(variant) === wanted);
   };
-  return data.find(matches)?.answer?.trim() || null;
+  const row = data.find(matches);
+  const answer = row?.answer?.trim();
+  return answer ? { answer, answerEn: row?.answer_en?.trim() ?? "" } : null;
+}
+
+export function findFaqAnswer(faqCsv: string, question: string | undefined): string | null {
+  return findFaqRow(faqCsv, question)?.answer ?? null;
 }
 
 export async function getFaqCsv(): Promise<string> {

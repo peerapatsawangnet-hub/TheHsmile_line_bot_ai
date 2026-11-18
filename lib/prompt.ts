@@ -1,3 +1,4 @@
+import { isEn } from "./i18n";
 import { buildIntentGuide } from "./intents";
 
 const MAX_QUESTION_LENGTH = 500;
@@ -31,7 +32,7 @@ ${buildIntentGuide()}
 <output_format>
 - ตอบเป็น JSON ตาม schema เท่านั้น
 - reply เป็นข้อความธรรมดา ไม่ใช้ markdown ไม่ใช้ bullet
-- reply ภาษาไทย ถ้าลูกค้าพิมพ์ภาษาอังกฤษ ให้ reply ภาษาอังกฤษแบบสุภาพ
+- reply ภาษาไทย ถ้าลูกค้าพิมพ์ภาษาอังกฤษ หรือมี <reply_language>English</reply_language> ให้ reply ภาษาอังกฤษแบบสุภาพ
 </output_format>`;
 
 export function buildSystemPrompt(): string {
@@ -41,6 +42,8 @@ export function buildSystemPrompt(): string {
 export function buildUserContent(faqCsv: string, question: string): string {
   // ลบ < > กันลูกค้าพิมพ์ปิด tag เอง
   const safeQuestion = question.replace(/[<>]/g, "").slice(0, MAX_QUESTION_LENGTH);
+  // ลูกค้าเลือกภาษาอังกฤษไว้ (Rich Menu) แม้กดปุ่มที่ส่งคำภาษาไทย reply ต้องเป็นภาษาอังกฤษ
+  const language = isEn() ? "\n\n<reply_language>English</reply_language>" : "";
 
   return `<faq>
 ${faqCsv}
@@ -48,5 +51,5 @@ ${faqCsv}
 
 <question>
 ${safeQuestion}
-</question>`;
+</question>${language}`;
 }

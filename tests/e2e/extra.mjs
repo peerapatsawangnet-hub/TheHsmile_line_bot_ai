@@ -108,10 +108,14 @@ export async function run(c) {
   plan.set("how much are braces", cls("faq", { found_in_faq: true, faq_question: "จัดฟันราคาเท่าไหร่", reply: "Braces start at 1,111 baht." }));
   r = await text("how much are braces", "Ufaq");
   check("english question -> Gemini's English reply", r.msg?.text === "Braces start at 1,111 baht.", r.msg?.text);
+  // English customer taps a FAQ button: the row's answer_en goes out verbatim, Type "..." lines become English postback buttons
+  r = await pb("a=faq&l=en&q=ขอรายละเอียดการจัดฟัน", c.user("Uenfaq"));
+  const enFaqBtn = items(r.msg)[0];
+  check("en: FAQ answer_en with English button", r.msg?.text === "🦷 Promo A\n• Month 1: 1,111" && enFaqBtn?.label === "📅 Book a consultation" && enFaqBtn.type === "postback" && new URLSearchParams(enFaqBtn.data).get("q") === "จองคิว" && enFaqBtn.displayText === "📅 Book a consultation", `${r.msg?.text} | ${JSON.stringify(enFaqBtn)}`);
   const sys = body.systemInstruction?.parts?.[0]?.text ?? "";
   const userTurn = body.contents?.[0]?.parts?.[0]?.text ?? "";
   check("prompt has intent guide + constraints", sys.includes("<intent_guide>") && sys.includes("- emergency:") && sys.includes("<constraints>"));
-  check("user turn is faq then question", /^<faq>\ncategory,question,answer\r?\n/.test(userTurn) && userTurn.trim().endsWith("</question>"));
+  check("user turn is faq then question", /^<faq>\ncategory,question,answer(,answer_en)?\r?\n/.test(userTurn) && userTurn.trim().endsWith("</question>"));
   check("JSON mode + temperature + tokens", body.generationConfig?.responseMimeType === "application/json" && body.generationConfig?.temperature === 1 && body.generationConfig?.maxOutputTokens === 1024 && body.generationConfig?.thinkingConfig?.thinkingLevel === "LOW" && Boolean(body.generationConfig?.responseSchema));
   const vertexProject = process.env.VERTEX_PROJECT_ID;
   if (vertexProject) {

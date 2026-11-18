@@ -1,0 +1,36 @@
+{
+  "size": { "width": 2500, "height": 1686 },
+  "selected": true,
+  "name": "The H Smile EN",
+  "chatBarText": "Menu",
+  "areas": [
+    {
+      "bounds": { "x": 0, "y": 0, "width": 833, "height": 750 },
+      "action": { "type": "message", "text": "Book appointment" }
+    },
+    {
+      "bounds": { "x": 833, "y": 0, "width": 834, "height": 750 },
+      "action": { "type": "message", "text": "What services do you offer and how much?" }
+    },
+    {
+      "bounds": { "x": 1667, "y": 0, "width": 833, "height": 750 },
+      "action": { "type": "message", "text": "Dental implants" }
+    },
+    {
+      "bounds": { "x": 0, "y": 750, "width": 833, "height": 750 },
+      "action": { "type": "message", "text": "How much are braces?" }
+    },
+    {
+      "bounds": { "x": 833, "y": 750, "width": 834, "height": 750 },
+      "action": { "type": "uri", "uri": "https://maps.app.goo.gl/BodRpe3CZwpPtynVA" }
+    },
+    {
+      "bounds": { "x": 1667, "y": 750, "width": 833, "height": 750 },
+      "action": { "type": "uri", "uri": "tel:0620389777" }
+    },
+    {
+      "bounds": { "x": 0, "y": 1500, "width": 2500, "height": 186 },
+      "action": { "type": "message", "text": "ภาษาไทย" }
+    }
+  ]
+}

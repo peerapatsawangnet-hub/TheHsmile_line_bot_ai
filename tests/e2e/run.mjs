@@ -34,6 +34,7 @@ const tgCalls = [];
 let tgDown = false;
 let patientReads = 0;
 let patientsDown = false;
+const linkedMenus = new Map();
 let lastPatientRanges = [];
 let calendarFails = false;
 let hideBusyOnce = false;
@@ -41,12 +42,12 @@ let insertRival = null;
 let createdClock = Date.now();
 // จัดฟัน: self-pay only; ครอบฟัน + สะพานฟัน share a group (one button, then a sub-card); ครอบฟัน has a booking note
 let servicesCsv = [
-  "service,duration_minutes,active,needs_doctor,accepts_rights,group,booking_note,min_days_ahead",
-  "ขูดหินปูน,15,TRUE,FALSE,,,",
+  "service,duration_minutes,active,needs_doctor,accepts_rights,group,booking_note,min_days_ahead,service_en,group_en,booking_note_en",
+  "ขูดหินปูน,15,TRUE,FALSE,,,,,Scaling,,",
   "รักษาราก,60,,,,,",
   "จัดฟัน,30,TRUE,FALSE,FALSE,,",
-  "ครอบฟัน,60,TRUE,FALSE,FALSE,ครอบฟัน / ทำฟันปลอม,ทันตแพทย์จะตรวจประเมินก่อนทำครอบฟันนะคะ",
-  "สะพานฟัน,60,TRUE,FALSE,FALSE,ครอบฟัน / ทำฟันปลอม,,",
+  "ครอบฟัน,60,TRUE,FALSE,FALSE,ครอบฟัน / ทำฟันปลอม,ทันตแพทย์จะตรวจประเมินก่อนทำครอบฟันนะคะ,,Crown,Crowns & dentures,The dentist will examine you first.",
+  "สะพานฟัน,60,TRUE,FALSE,FALSE,ครอบฟัน / ทำฟันปลอม,,,Bridge,Crowns & dentures,",
   "ฟอกสีฟัน ZOOM,60,TRUE,FALSE,FALSE,,มัดจำ 5000 บาท,7",
   "ปิดอยู่,15,FALSE,,,,,",
 ].join("\n") + "\n";
@@ -54,9 +55,10 @@ let servicesCsv = [
 let settingsDown = true;
 let settingsCsv = "key,value\nbot_enabled,TRUE\nbot_mode,live\n";
 // fake prices; the second and third rows check verbatim multi-line answers and tap buttons
-const faqCsv = "category,question,answer,active\nเวลา,เปิดกี่โมง,เปิด 10:00-19:00 น.,TRUE\n" +
+// the details row also has an English answer (answer_en) with a Type "..." button
+const faqCsv = "category,question,answer,active,answer_en\nเวลา,เปิดกี่โมง,เปิด 10:00-19:00 น.,TRUE\n" +
   "ราคา,จัดฟันราคาเท่าไหร่ / จัดฟันกี่บาท / braces,\"จัดฟันเริ่มต้น 1,111 บาทค่ะ\nหากสนใจรายละเอียด พิมพ์คำว่า “ขอรายละเอียดการจัดฟัน” ได้เลยค่ะ\",TRUE\n" +
-  "ราคา,ขอรายละเอียดการจัดฟัน,\"🦷 โปร A\n* เดือน 1: 1,111\n* เดือน 2–11: 222\",TRUE\n" +
+  "ราคา,ขอรายละเอียดการจัดฟัน,\"🦷 โปร A\n* เดือน 1: 1,111\n* เดือน 2–11: 222\",TRUE,\"🦷 Promo A\n• Month 1: 1,111\n📅 Book a consultation Type \"\"จองคิว\"\"\"\n" +
   "เวลา,สงกรานต์เปิดไหม / ปีใหม่เปิดไหม,[นโยบายวันหยุดนักขัตฤกษ์],TRUE\n";
 // Gemini mock: question -> classification, or "500" / "maxtokens" / "badjson"
 const plan = new Map();
@@ -192,6 +194,17 @@ const mock = createServer(async (req, res) => {
     return json(res, 200, { ok: true, result: { message_id: 1 } });
   }
   if (p.includes("/v2/bot/profile/")) return json(res, 200, { displayName: "คุณทดสอบ", userId: "x" });
+  // Rich Menu: the TH menu is everyone's default, EN is linked per user when they switch
+  if (p === "/v2/bot/richmenu/list") {
+    return json(res, 200, { richmenus: [{ richMenuId: "rm-th", name: "The H Smile TH" }, { richMenuId: "rm-en", name: "The H Smile EN" }] });
+  }
+  const userMenu = p.match(/^\/v2\/bot\/user\/([^/]+)\/richmenu(?:\/([^/]+))?$/);
+  if (userMenu && userMenu[1] !== "all") {
+    const [, menuUser, menuId] = userMenu;
+    if (req.method === "GET") return linkedMenus.has(menuUser) ? json(res, 200, { richMenuId: linkedMenus.get(menuUser) }) : json(res, 404, { message: "the user has no richmenu" });
+    if (req.method === "POST") { linkedMenus.set(menuUser, menuId); return json(res, 200, {}); }
+    if (req.method === "DELETE") { linkedMenus.delete(menuUser); return json(res, 200, {}); }
+  }
   if (p.includes("/v2/bot/message/push")) { pushes.push(JSON.parse(body)); return json(res, 200, {}); }
   if (p.includes("/v2/bot/message/reply")) { replies.push(JSON.parse(body)); return json(res, 200, {}); }
   res.writeHead(404); res.end();
@@ -641,6 +654,46 @@ check("patient sheet read once for all bookings (cached)", patientReads === 1, S
   r = await pb(items(r.msg).find((a) => /^\d\d:\d\d$/.test(a.label)).data, user("Ugone"));
   const goneReq = live().find((e) => e.extendedProperties?.private?.replaces === gone.id);
   check("retired service reschedule -> request keeps the original length", goneReq && Date.parse(goneReq.end.dateTime) - Date.parse(goneReq.start.dateTime) === 30 * 60000 && r.msg?.text?.startsWith("ส่งคำขอเลื่อนนัดเป็น"), r.msg?.text);
+}
+// ---- English: the customer switches with the Rich Menu bar; LINE keeps the per-user menu, buttons carry l=en
+{
+  const E = "Uen";
+  const enUser = user(E);
+  r = await text("English", E);
+  check("en: switch -> English reply + EN menu linked", r.msg?.text === "Switched to English 😊 How can we help you?" && linkedMenus.get(E) === "rm-en", r.msg?.text);
+  r = await text("Book appointment", E);
+  const enSvc = items(r.msg);
+  check("en: service card in English, English names from the Sheet, Thai name when service_en is blank", r.msg?.text?.startsWith("Which service would you like to book?") && enSvc.map((a) => a.label).join() === "Scaling,รักษาราก,จัดฟัน,Crowns & dentures,ฟอกสีฟัน ZOOM,Other service / talk to staff" && enSvc.filter((a) => a.type === "postback").every((a) => new URLSearchParams(a.data).get("l") === "en"), `${r.msg?.text} | ${enSvc.map((a) => a.label).join()}`);
+  r = await pb(enSvc[0].data, enUser);
+  check("en: date card", r.msg?.text === "Which day would you like?" && /^[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2}$/.test(items(r.msg)[0]?.label ?? ""), `${r.msg?.text} | ${items(r.msg)[0]?.label}`);
+  r = await pb(q({ a: "date", s: "ขูดหินปูน", d: dnDay, l: "en" }), enUser);
+  check("en: period card", /^What time of day suits you on [A-Z][a-z]+ \d{1,2} [A-Z][a-z]{2}\?$/.test(r.msg?.text ?? "") && items(r.msg).map((a) => a.label).join().includes("Afternoon,Evening,Another day"), `${r.msg?.text} | ${items(r.msg).map((a) => a.label).join()}`);
+  r = await pb(items(r.msg).find((a) => a.label === "Afternoon").data, enUser);
+  check("en: suggested times", /^We have openings on .+ \(afternoon\)\.\nHere are the 2 earliest times\. If neither suits you, tap "Other times"\.$/.test(r.msg?.text ?? ""), r.msg?.text);
+  r = await pb(items(r.msg)[0].data, enUser);
+  const enHold = live().find((e) => e.extendedProperties?.private?.lineUserId === E);
+  check("en: hold remembers the language, asks how to pay", enHold?.extendedProperties.private.lang === "en" && /^We're holding .+ at \d\d:\d\d for you\.\nHow will you pay for this treatment\?$/.test(r.msg?.text ?? "") && items(r.msg).map((a) => a.label).join() === "Gold Card (UCS),Social Security,Self-pay", r.msg?.text);
+  r = await pb(items(r.msg)[0].data, enUser);
+  check("en: asks name + phone", r.msg?.text?.startsWith("We'll book you in for") && r.msg.text.includes("John Smith 0812345678"), r.msg?.text);
+  const pcEn = pushes.length;
+  r = await text("John Smith +44 7700 900123", E);
+  check("en: foreign phone accepted, asks first visit", r.msg?.text === "Have you visited our clinic before?" && items(r.msg).map((a) => a.label).join() === "I've been here before,First visit", r.msg?.text);
+  r = await pb(items(r.msg)[1].data, enUser);
+  check("en: request sent in English", /^Your request for Scaling on .+ has been sent\. Our staff will confirm it shortly 🙏$/.test(r.msg?.text ?? ""), r.msg?.text);
+  const enCard = pushes.slice(pcEn).find((p) => p.to === "Cadmin")?.messages[0];
+  const enCardText = JSON.stringify(enCard ?? "");
+  check("en: admin card stays Thai, flagged 🇬🇧", enCardText.includes("🇬🇧") && enCardText.includes("John Smith +447700900123 ขูดหินปูน สปสช คนไข้ใหม่ ไลน์ OA") && enCardText.includes("วัน"), enCardText.slice(0, 220));
+  const ccEn = custPushes().length;
+  await adminPb(enCard.contents.footer.contents[0].action.data);
+  check("en: admin confirm -> customer told in English", custPushes().length === ccEn + 1 && lastCust().to === E && lastCust().messages[0].text?.startsWith("Your appointment on "), JSON.stringify(lastCust().messages[0]).slice(0, 160));
+  // an English FAQ button sends the Thai command as a postback; the answer itself is checked in extra.mjs
+  // (settings are still unreadable here, so a FAQ answer would only go to the shadow preview)
+  r = await pb("a=faq&l=en&q=จองคิว", enUser);
+  check("en: FAQ button runs the Thai command in English", r.msg?.text?.startsWith("You already have an appointment on "), r.msg?.text);
+  r = await text("ภาษาไทย", E);
+  check("en: switch back -> Thai reply + EN menu unlinked", r.msg?.text === "เปลี่ยนเป็นภาษาไทยแล้วค่ะ 😊 มีอะไรให้ช่วยไหมคะ" && !linkedMenus.has(E), r.msg?.text);
+  r = await text("จองคิว", E);
+  check("en: after switching back, booking replies are Thai again", r.msg?.text?.startsWith("คุณลูกค้ามีนัดอยู่แล้ว"), r.msg?.text);
 }
 check("all month tabs read, quoted", lastPatientRanges.join("|") === "'ตุลาคม 2569'|'พฤศจิกายน 2569'|'สรุป'", lastPatientRanges.join("|"));
 

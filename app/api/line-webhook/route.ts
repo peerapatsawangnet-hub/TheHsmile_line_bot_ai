@@ -16,7 +16,9 @@ import {
 } from "@/lib/booking";
 import { getDoctorScheduleImage } from "@/lib/booking-config";
 import { exactFaqReply, faqCard, faqReply } from "@/lib/faq-reply";
-import { LOOKUP_TIMEOUT_MS, THANKS_REPLY } from "@/lib/config";
+import { LOOKUP_TIMEOUT_MS, THANKS_REPLY, THANKS_REPLY_EN } from "@/lib/config";
+import { Lang, looksEnglish, tr, withLang } from "@/lib/i18n";
+import { setUserLang, userLang } from "@/lib/rich-menu";
 import { handoffCard } from "@/lib/flex-cards";
 import { Classification, classifyMessage } from "@/lib/gemini";
 import {
@@ -63,12 +65,27 @@ async function sendReply(replyToken: string, messages: Message | Message[]): Pro
 
 const text = (value: string): Message => ({ type: "text", text: value });
 
-const DOCTOR_NEXT_STEPS: messagingApi.QuickReply = {
-  items: ["จองคิว", "คุยกับแอดมิน"].map((label) => ({
+// ปุ่มส่งเป็นข้อความ จึงเข้าคำสั่งตรงเดียวกับที่พิมพ์เอง (คำอังกฤษก็เป็นคำสั่งจองคิว/ติดต่อแอดมิน)
+const doctorNextSteps = (): messagingApi.QuickReply => ({
+  items: [tr("จองคิว", "Book appointment"), tr("คุยกับแอดมิน", "Talk to staff")].map((label) => ({
     type: "action",
     action: { type: "message", label, text: label },
   })),
-};
+});
+
+// ลูกค้ากดแถบ "English" / "ภาษาไทย" ใน Rich Menu หรือพิมพ์เอง
+function languageSwitch(message: string): Lang | null {
+  const word = message.trim().toLowerCase();
+  if (/^(?:english|eng|en)$/.test(word)) return "en";
+  if (/^(?:ภาษาไทย|ไทย|thai)$/.test(word)) return "th";
+  return null;
+}
+
+// ภาษาที่ตอบ: ลูกค้าที่เลือก Rich Menu ภาษาอังกฤษ หรือพิมพ์ข้อความภาษาอังกฤษล้วน (ตอบข้อความนั้นเป็นอังกฤษ)
+async function languageFor(userId: string, message: string): Promise<Lang> {
+  if ((await userLang(userId)) === "en") return "en";
+  return looksEnglish(message) ? "en" : "th";
+}
 
 // คืน null ถ้าเกินเวลา เพื่อไม่ให้รวมแล้วเกินงบเวลาของข้อความ
 async function withinLookupBudget<T>(work: Promise<T>): Promise<T | null> {
@@ -176,7 +193,7 @@ async function act(decision: Decision, userId: string, replyToken: string, messa
       // คำตอบที่มีปุ่มเป็นการ์ดปุ่มใหญ่ แบบเดียวกับการ์ดจองคิว
       return sendReply(replyToken, decision.buttons ? faqCard(decision.text, decision.buttons) : text(decision.text));
     case "thanks":
-      return sendReply(replyToken, text(THANKS_REPLY));
+      return sendReply(replyToken, text(tr(THANKS_REPLY, THANKS_REPLY_EN)));
     case "silent":
       return;
     case "notify":
@@ -207,7 +224,7 @@ async function act(decision: Decision, userId: string, replyToken: string, messa
       const messages: Message[] = [text(answer)];
       if (image) messages.push({ type: "image", originalContentUrl: image, previewImageUrl: image });
       // ลูกค้ามักอยากนัดต่อ ปุ่มส่งเป็นข้อความ จึงเข้าคำสั่งตรงเดียวกับที่พิมพ์เอง
-      messages[messages.length - 1] = { ...messages[messages.length - 1], quickReply: DOCTOR_NEXT_STEPS };
+      messages[messages.length - 1] = { ...messages[messages.length - 1], quickReply: doctorNextSteps() };
       return sendReply(replyToken, messages);
     }
   }
@@ -225,6 +242,17 @@ async function handleText(userId: string, replyToken: string, message: string): 
     const emergency = result ? result.intent === "emergency" : fallbackIntent(message) === "emergency";
     if (emergency) await notifyEmergency(userId, message);
     return;
+  }
+
+  // สลับภาษา: LINE จำ Rich Menu ของลูกค้าคนนี้ไว้ ข้อความต่อ ๆ ไปจึงตอบภาษาใหม่
+  const switchTo = languageSwitch(message);
+  if (switchTo) {
+    await setUserLang(userId, switchTo);
+    console.log(JSON.stringify({ tag: "language_switch", lang: switchTo }));
+    return withLang(switchTo, () => sendReply(replyToken, text(tr(
+      "เปลี่ยนเป็นภาษาไทยแล้วค่ะ 😊 มีอะไรให้ช่วยไหมคะ",
+      "Switched to English 😊 How can we help you?",
+    ))));
   }
 
   // คำสั่งตรงทำงานแบบเดิมเสมอ
@@ -295,11 +323,23 @@ async function handlePostback(event: webhook.PostbackEvent): Promise<void> {
   }
 
   if (source?.type !== "user") return;
+  const { userId } = source as webhook.UserSource;
+  const params = new URLSearchParams(postback.data);
+  // ปุ่มของลูกค้าภาษาอังกฤษพก l=en ปุ่มอื่นใช้ภาษาตาม Rich Menu
+  const lang: Lang = params.get("l") === "en" ? "en" : userId ? await userLang(userId) : "th";
+
+  // ปุ่มในคำตอบ FAQ ภาษาอังกฤษ: ลูกค้าเห็นป้ายภาษาอังกฤษ บอทได้คำภาษาไทย ทำเหมือนลูกค้าพิมพ์คำนั้นเอง
+  if (params.get("a") === "faq") {
+    const question = params.get("q") ?? "";
+    if (userId && question) await withLang(lang, () => handleText(userId, replyToken, question));
+    return;
+  }
+
   // ปิดบอทแล้วไม่ตอบปุ่มในขั้นจองคิว แต่ปุ่มยืนยันมาตามนัดยังใช้ได้
-  const isAttendance = new URLSearchParams(postback.data).get("a") === "attend";
+  const isAttendance = params.get("a") === "attend";
   if (!isAttendance && !(await getSettings()).enabled) return;
 
-  const reply = await handleBookingPostback(postback.data, (source as webhook.UserSource).userId);
+  const reply = await withLang(lang, () => handleBookingPostback(postback.data, userId));
   if (reply) await sendReply(replyToken, reply);
 }
 
@@ -324,7 +364,9 @@ async function handleEvent(event: webhook.Event): Promise<void> {
 
     // สติกเกอร์ รูป ไฟล์: เงียบ
     if (message.type !== "text") return;
-    await handleText(userId, replyToken, (message as webhook.TextMessageContent).text);
+    const content = (message as webhook.TextMessageContent).text;
+    const lang = await languageFor(userId, content);
+    await withLang(lang, () => handleText(userId, replyToken, content));
   } catch (err) {
     console.error(JSON.stringify({
       tag: "unhandled",
