@@ -643,8 +643,9 @@ async function holdSlot(
   userId: string,
   now: number,
 ): Promise<Message> {
-  const [upcoming] = await findUserEvents("lineUserId", userId, now);
-  if (upcoming) return existingBookingMessage(upcoming);
+  // คิวที่กันไว้แต่ยังกรอกไม่เสร็จไม่นับเป็นนัด ลูกค้าเปลี่ยนใจกดเวลาใหม่ได้ (ลบคิวเดิมหลังกันคิวใหม่สำเร็จ)
+  const { booking, holds } = await userEvents(userId, now);
+  if (booking) return existingBookingMessage(booking);
 
   // ปุ่มเก่าหรือปุ่มที่แก้เอง: บริการที่ชำระเองใช้สิทธิอื่นไม่ได้
   const right = !service.acceptsRights ? "self" : RIGHTS[chosenRight] ? chosenRight : "";
@@ -677,8 +678,25 @@ async function holdSlot(
     await deleteEvent(event.id);
     return withPrefix("เวลานี้คิวเต็มแล้วค่ะ", await askTime(service, right, "", date, period, now));
   }
+  await Promise.all(holds.map(({ id }) => deleteEvent(id)));
 
   return nextHoldStep(event);
+}
+
+const isHold = (event: CalendarEvent) => Boolean(event.extendedProperties?.private?.awaitingDetailsFor);
+
+// นัดจริงของลูกค้า (ใกล้สุด) กับคิวที่กันไว้ระหว่างกรอกข้อมูลซึ่งยังไม่หมดเวลา
+async function userEvents(userId: string, now: number): Promise<{ booking?: CalendarEvent; holds: CalendarEvent[] }> {
+  const events = await findUserEvents("lineUserId", userId, now);
+  return { booking: events.find((event) => !isHold(event)), holds: events.filter(isHold) };
+}
+
+// บริการที่ปิดหรือเปลี่ยนชื่อใน Sheet ไปแล้ว นัดเดิมยังเลื่อนได้ ใช้ความยาวของนัดเดิมแทน
+function serviceFromEvent(event: CalendarEvent): Service | null {
+  const name = event.extendedProperties?.private?.service;
+  const minutes = (Date.parse(event.end?.dateTime ?? "") - Date.parse(event.start?.dateTime ?? "")) / MINUTE_MS;
+  if (!name || !(minutes > 0)) return null;
+  return { name, minutes, needsDoctor: true, acceptsRights: true, group: "", bookingNote: "", minDaysAhead: 0 };
 }
 
 type PrivateProps = Record<string, string | null>;
@@ -854,8 +872,9 @@ export async function startBooking(userId: string | undefined, text: string, slo
   if (!userId) return null;
   try {
     const now = Date.now();
-    const [upcoming] = await findUserEvents("lineUserId", userId, now);
-    if (upcoming) return existingBookingMessage(upcoming);
+    // คิวที่ยังกรอกไม่เสร็จไม่กันการเริ่มจองใหม่ คิวเก่าถูกลบตอนกันคิวใหม่
+    const { booking } = await userEvents(userId, now);
+    if (booking) return existingBookingMessage(booking);
 
     const prefill = prefillFromSlots(slots, now, text);
     const services = await getServices();
@@ -901,10 +920,12 @@ export async function startReschedule(userId: string | undefined): Promise<Messa
     if (pending) return pendingRescheduleMessage(pending);
 
     const [original] = bookings;
-    if (original?.extendedProperties?.private?.cancelRequested) return pendingCancelMessage(original);
-    const props = original?.extendedProperties?.private ?? {};
-    const service = (await getServices()).find(({ name }) => name === props.service);
-    if (!original || !service || !RIGHTS[props.right ?? ""] || !VISITS[props.visit ?? ""]) return null;
+    // ยังไม่มีนัดจริง มีแค่คิวที่กันไว้ระหว่างกรอกข้อมูล: ปล่อยคิวนั้นแล้วให้เลือกวันใหม่ของบริการเดิม
+    if (!original) return await restartHold(userId, now);
+    if (original.extendedProperties?.private?.cancelRequested) return pendingCancelMessage(original);
+    const props = original.extendedProperties?.private ?? {};
+    const service = (await getServices()).find(({ name }) => name === props.service) ?? serviceFromEvent(original);
+    if (!service) return null;
 
     return withPrefix(
       `นัดเดิมของคุณคือ${formatWhen(original.start?.dateTime ?? "")} ค่ะ เลือกวันใหม่ได้เลยนะคะ หากต้องการให้แอดมินช่วย พิมพ์ "ขอแอดมิน" ได้เลยค่ะ`,
@@ -914,6 +935,19 @@ export async function startReschedule(userId: string | undefined): Promise<Messa
     logBookingError(err);
     return null;
   }
+}
+
+// คืน null เมื่อไม่มีคิวค้าง ให้ผู้เรียกส่งต่อแอดมินแบบเดิม
+async function restartHold(userId: string, now: number): Promise<Message | null> {
+  const { holds } = await userEvents(userId, now);
+  const [hold] = holds;
+  if (!hold) return null;
+  const props = hold.extendedProperties?.private ?? {};
+  const service = (await getServices()).find(({ name }) => name === props.service) ?? serviceFromEvent(hold);
+  await Promise.all(holds.map(({ id }) => deleteEvent(id)));
+  const released = `ยกเลิกคิว${formatWhen(hold.start?.dateTime ?? "")} ที่ยังจองไม่เสร็จให้แล้วค่ะ`;
+  if (!service) return withPrefix(released, await askService());
+  return withPrefix(`${released} เลือกวันใหม่ได้เลยนะคะ`, await askDate(service, RIGHTS[props.right ?? ""] ? props.right ?? "" : "", "", now));
 }
 
 const cleanTitle = (summary: string | undefined) => (summary ?? "").replace(CANCEL_PREFIX, "").replace(PENDING_PREFIX, "");
@@ -930,9 +964,16 @@ function pendingCancelMessage(event: CalendarEvent): Message {
 export async function startCancel(userId: string | undefined): Promise<Message | null> {
   if (!userId) return null;
   try {
-    const event = (await upcomingBookings(userId, Date.now()))
+    const now = Date.now();
+    const event = (await upcomingBookings(userId, now))
       .find((e) => !e.extendedProperties?.private?.replaces);
-    if (!event) return null;
+    if (!event) {
+      // ยังไม่มีนัดจริง มีแค่คิวที่กันไว้ระหว่างกรอกข้อมูล: ปล่อยคิวนั้นเลย ไม่ต้องรอแอดมิน
+      const { holds } = await userEvents(userId, now);
+      if (holds.length === 0) return null;
+      await Promise.all(holds.map(({ id }) => deleteEvent(id)));
+      return { type: "text", text: `ยกเลิกคิว${formatWhen(holds[0].start?.dateTime ?? "")} ที่ยังจองไม่เสร็จให้แล้วค่ะ 🙏` };
+    }
     if (event.extendedProperties?.private?.cancelRequested) return pendingCancelMessage(event);
     return choices(`ต้องการยกเลิกนัด${formatWhen(event.start?.dateTime ?? "")} ใช่ไหมคะ`, [
       { label: "ยกเลิกนัด", data: postbackData({ a: "cancel", e: event.id }), displayText: "ยกเลิกนัด" },
@@ -1093,7 +1134,15 @@ export async function handleBookingPostback(data: string, userId: string | undef
     if (action === "svcs") {
       return prefill.date ? await askServiceForDate(services, prefill, prefill.date, now) : await askService(prefill);
     }
-    const service = services.find(({ name }) => name === params.get("s"));
+    let service = services.find(({ name }) => name === params.get("s"));
+    // เลื่อนนัดของบริการที่ปิดหรือเปลี่ยนชื่อใน Sheet แล้ว: ใช้ข้อมูลจากนัดเดิมของลูกค้าคนนี้เอง
+    if (!service && params.get("x")) {
+      const original = await getEvent(params.get("x") ?? "");
+      const props = original?.extendedProperties?.private;
+      if (original && props?.lineUserId === userId && props.service === params.get("s")) {
+        service = serviceFromEvent(original) ?? undefined;
+      }
+    }
     if (!service) return await askService(prefill);
     const right = RIGHTS[params.get("r") ?? ""] ? params.get("r") ?? "" : "";
     if (action === "svc" || action === "right" || action === "visit") {

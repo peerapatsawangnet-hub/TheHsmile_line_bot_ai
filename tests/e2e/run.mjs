@@ -615,6 +615,33 @@ r = await pb(items(r.msg).find((a) => a.label === "มาครั้งแร�
 check("service note appended to request text", /^ส่งคำขอนัดครอบฟัน .+ แอดมินจะยืนยันนัดให้อีกครั้งนะคะ 🙏\nทันตแพทย์จะตรวจประเมินก่อนทำครอบฟันนะคะ$/.test(r.msg?.text ?? ""), r.msg?.text);
 check("self-pay group service saved as ชำระเอง", live().find((e) => e.extendedProperties?.private?.lineUserId === "Unote")?.summary === "[รอแอดมิน] ทดสอบ โน้ต 0822222222 ครอบฟัน ชำระเอง คนไข้ใหม่ ไลน์ OA");
 check("patient sheet read once for all bookings (cached)", patientReads === 1, String(patientReads));
+// ---- seen live: a queue held but not finished (no name yet), then the customer taps another time,
+// เลื่อนนัด or ยกเลิกนัด. The unfinished hold must not count as a booking or be sent to admin.
+{
+  const ofUser = (u) => live().filter((e) => e.extendedProperties?.private?.lineUserId === u);
+  const hslot = (t) => pb(q({ a: "slot", s: "ขูดหินปูน", r: "gold", d: dnDay, p: "am", t: String(t) }), user("Uhold"));
+  r = await hslot(10 * 60 + 30);
+  const firstHold = ofUser("Uhold")[0];
+  r = await hslot(10 * 60 + 45);
+  check("hold then another time -> hold moves, no 'มีนัดอยู่แล้ว'", ofUser("Uhold").length === 1 && ofUser("Uhold")[0].start.dateTime === `${dnDay}T10:45:00+07:00` && events.get(firstHold.id).status === "cancelled" && r.msg?.text?.startsWith("เจ้าหน้าที่จะบันทึกการนัดหมาย"), r.msg?.text);
+  const pcH = pushes.length;
+  r = await text("เลื่อนนัด", "Uhold");
+  check("hold then เลื่อนนัด -> hold released, new date card, no admin", /^ยกเลิกคิววัน.+ ที่ยังจองไม่เสร็จให้แล้วค่ะ เลือกวันใหม่ได้เลยนะคะ\nต้องการนัดวันไหนคะ$/.test(r.msg?.text ?? "") && ofUser("Uhold").length === 0 && pushes.length === pcH, r.msg?.text);
+  r = await hslot(10 * 60 + 30);
+  r = await text("ยกเลิกนัด", "Uhold");
+  check("hold then ยกเลิกนัด -> hold released at once, no admin", /^ยกเลิกคิววัน.+ ที่ยังจองไม่เสร็จให้แล้วค่ะ 🙏$/.test(r.msg?.text ?? "") && ofUser("Uhold").length === 0 && pushes.length === pcH, r.msg?.text);
+
+  // a booking whose service was renamed or turned off in the Sheet can still be rescheduled
+  const gone = seed(dnDay, "11:30", 30, { summary: "ทดสอบ เลิกแล้ว 0855555555 บริการเลิกแล้ว", colorId: "7", extendedProperties: { private: { source: "line", lineUserId: "Ugone", service: "บริการเลิกแล้ว", right: "self", visit: "old" } } });
+  r = await text("เลื่อนนัด", "Ugone");
+  const goneDates = items(r.msg).filter((a) => a.label !== "วันถัดไป ›");
+  check("retired service -> reschedule still offered", r.msg?.text?.startsWith("นัดเดิมของคุณคือวัน") && goneDates.length > 0 && goneDates.every((a) => new URLSearchParams(a.data).get("x") === gone.id), r.msg?.text);
+  r = await pb(goneDates.at(-1).data, user("Ugone"));
+  r = await pb(items(r.msg).find((a) => a.label.startsWith("ช่วง")).data, user("Ugone"));
+  r = await pb(items(r.msg).find((a) => /^\d\d:\d\d$/.test(a.label)).data, user("Ugone"));
+  const goneReq = live().find((e) => e.extendedProperties?.private?.replaces === gone.id);
+  check("retired service reschedule -> request keeps the original length", goneReq && Date.parse(goneReq.end.dateTime) - Date.parse(goneReq.start.dateTime) === 30 * 60000 && r.msg?.text?.startsWith("ส่งคำขอเลื่อนนัดเป็น"), r.msg?.text);
+}
 check("all month tabs read, quoted", lastPatientRanges.join("|") === "'ตุลาคม 2569'|'พฤศจิกายน 2569'|'สรุป'", lastPatientRanges.join("|"));
 
 // ---- customer cancels a LINE booking, admin decides
